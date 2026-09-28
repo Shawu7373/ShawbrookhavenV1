@@ -1,9 +1,13 @@
 --// ====================================================================
---// SHAW BROOKHAVEN HUB v3.3 (Fixed)
+--// SHAW BROOKHAVEN HUB v3.5
 --// Made by: Shaw | Discord: Shaw6000
+--// Camera Fly + Force Fly + 40+ Chat Commands | Bug-Free
 --// ====================================================================
 
 print("[Shaw Hub] Script execution started.")
+
+if getgenv().ShawBHub then pcall(getgenv().ShawBHub) end
+getgenv().ShawBHub = function() end
 
 local ok, err = pcall(function()
 
@@ -17,13 +21,11 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local StarterGui = game:GetService("StarterGui")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
-local SoundService = game:GetService("SoundService")
 
 local LP = Players.LocalPlayer
 local PG = LP:WaitForChild("PlayerGui", 15)
 if not PG then warn("[Shaw Hub] PlayerGui not found."); return end
 
-getgenv().ShawBHub = function() end
 for _, v in ipairs(PG:GetChildren()) do
     if v.Name == "ShawBrookhavenHub" or v.Name == "ShawFlyPad" then
         pcall(function() v:Destroy() end)
@@ -46,7 +48,7 @@ end
 print("[Shaw Hub] Step 1: Loading Rayfield...")
 
 local Rayfield
-local rayfieldSources = {
+local sources = {
     "https://sirius.menu/rayfield",
     "https://raw.githubusercontent.com/shlexware/Rayfield/main/source.lua",
     "https://raw.githubusercontent.com/Footagesus/Rayfield/main/source.lua",
@@ -54,7 +56,7 @@ local rayfieldSources = {
     "https://rayfield.menu/api/load"
 }
 
-for i, url in ipairs(rayfieldSources) do
+for i, url in ipairs(sources) do
     local ok2, result = pcall(function()
         local source = game:HttpGet(url)
         if not source or #source < 100 then error("Empty response") end
@@ -87,6 +89,22 @@ end
 
 print("[Shaw Hub] Step 2: State setup...")
 
+-- ===== PlayerControls (retry on demand) =====
+local PlayerControls = nil
+local function getPlayerControls()
+    if PlayerControls then return PlayerControls end
+    local ok2, result = pcall(function()
+        local PlayerModule = LP:WaitForChild("PlayerScripts"):WaitForChild("PlayerModule", 3)
+        if PlayerModule then
+            local mod = require(PlayerModule)
+            return mod:GetControls()
+        end
+    end)
+    if ok2 and result then PlayerControls = result end
+    return PlayerControls
+end
+pcall(getPlayerControls)
+
 local S = {
     Godmode = false, Noclip = false, Fly = false,
     FlySpeed = 60, FlyCurrentSpeed = 0,
@@ -105,13 +123,15 @@ local S = {
     VehicleFly = false, VehicleFlySpeed = 60,
     OriginalLighting = {
         Ambient = Lighting.Ambient, OutdoorAmbient = Lighting.OutdoorAmbient,
-        Brightness = Lighting.Brightness, FogEnd = Lighting.FogEnd, FogStart = Lighting.FogStart
+        Brightness = Lighting.Brightness, FogEnd = Lighting.FogEnd, FogStart = Lighting.FogStart,
+        ClockTime = Lighting.ClockTime
     },
     OriginalCollisions = {}, OriginalAnchored = {}
 }
 
 local Conn = {}
 local ESPObjects = {}
+local PlayerEffects = {}
 local FlyBV, FlyBG = nil, nil
 local FloatBV = nil
 local VehicleBV, VehicleBG = nil, nil
@@ -123,6 +143,9 @@ local MusicRemoteChecked = false
 local SavedSongs = {}
 local StareTarget = nil
 local CachedGPUnlockRemotes = nil
+local playerList = {}
+local selectedDropdown = nil
+local savedSongsDropdown = nil
 
 local function track(c) table.insert(Conn, c); return c end
 local function destroy(o) if o and o.Parent then pcall(function() o:Destroy() end) end end
@@ -138,13 +161,40 @@ local function getCurrentVehicle()
     return vehicle
 end
 
+local function refreshPlayerList()
+    playerList = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LP then table.insert(playerList, p.Name) end
+    end
+end
+refreshPlayerList()
+
+-- ===== Camera-relative input =====
+local function getCameraRelativeMoveDir()
+    local cam = Workspace.CurrentCamera
+    if not cam then return Vector3.zero end
+    local inputX, inputZ = 0, 0
+    local controls = getPlayerControls()
+    if controls then
+        local ok2, vec = pcall(function() return controls:GetMoveVector() end)
+        if ok2 and vec then inputX = vec.X; inputZ = vec.Z end
+    end
+    if math.abs(inputX) < 0.01 and math.abs(inputZ) < 0.01 then
+        if UIS:IsKeyDown(Enum.KeyCode.W) then inputZ = inputZ + 1 end
+        if UIS:IsKeyDown(Enum.KeyCode.S) then inputZ = inputZ - 1 end
+        if UIS:IsKeyDown(Enum.KeyCode.D) then inputX = inputX + 1 end
+        if UIS:IsKeyDown(Enum.KeyCode.A) then inputX = inputX - 1 end
+    end
+    local camLook = cam.CFrame.LookVector
+    local camRight = cam.CFrame.RightVector
+    return (camLook * inputZ) + (camRight * inputX)
+end
+
+-- ===== Music =====
 local function findBrookhavenMusicRemote()
     if MusicRemoteChecked then return MusicRemote end
     MusicRemoteChecked = true
-    local candidates = {
-        "PlayMusic","MusicEvent","PlaySong","SetMusic","RadioEvent","MusicRemote",
-        "BoomboxEvent","PlayAudio","SoundEvent","FireMusic","SongEvent","Music","Radio","Boombox"
-    }
+    local candidates = {"PlayMusic","MusicEvent","PlaySong","SetMusic","RadioEvent","MusicRemote","BoomboxEvent","PlayAudio","SoundEvent","FireMusic","SongEvent","Music","Radio","Boombox"}
     for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
         if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
             local lower = obj.Name:lower()
@@ -235,10 +285,7 @@ local function loadSongs()
             local ok3, content = pcall(readfile, SAVE_FILE)
             if ok3 then
                 local ok4, decoded = pcall(function() return HttpService:JSONDecode(content) end)
-                if ok4 and type(decoded) == "table" then
-                    SavedSongs = decoded
-                    return
-                end
+                if ok4 and type(decoded) == "table" then SavedSongs = decoded; return end
             end
         end
     end
@@ -274,6 +321,7 @@ local function removeSong(id)
     return false
 end
 
+-- ===== Fly =====
 local function startFly()
     local char, hum, root = getChar(), getHum(), getRoot()
     if not char or not hum or not root then return end
@@ -305,13 +353,15 @@ end
 local function updateFly(dt)
     if not S.Fly then return end
     local hum, root = getHum(), getRoot()
-    if not hum or not root or not FlyBV or not FlyBV.Parent or not FlyBG or not FlyBG.Parent then return end
+    if not hum or not root then return end
+    if not FlyBV or not FlyBV.Parent or not FlyBG or not FlyBG.Parent then
+        startFly()
+        return
+    end
     local cam = Workspace.CurrentCamera; if not cam then return end
-
-    local moveDir = hum.MoveDirection
+    local moveDir = getCameraRelativeMoveDir()
     if UIS:IsKeyDown(Enum.KeyCode.Space) then moveDir = moveDir + Vector3.new(0, 1, 0) end
     if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir = moveDir - Vector3.new(0, 1, 0) end
-
     if moveDir.Magnitude > 0.01 then moveDir = moveDir.Unit end
     local targetSpeed = (moveDir.Magnitude > 0.01) and S.FlySpeed or 0
     local rampRate = 4
@@ -324,10 +374,11 @@ local function updateFly(dt)
     FlyBG.CFrame = cam.CFrame
 end
 
+-- ===== TP Walk =====
 local function updateTpWalk(dt)
     if not S.TpWalk then return end
     local hum, root = getHum(), getRoot(); if not hum or not root then return end
-    local md = hum.MoveDirection
+    local md = getCameraRelativeMoveDir()
     if md.Magnitude > 0.01 then
         local newPos = root.Position + md * S.TpWalkSpeed * dt
         local char = getChar()
@@ -340,6 +391,7 @@ local function updateTpWalk(dt)
     end
 end
 
+-- ===== Wall Walk =====
 local lastWallScan = 0
 local function updateWallWalk(dt)
     if not S.WallWalk then return end
@@ -361,6 +413,7 @@ local function updateWallWalk(dt)
     end
 end
 
+-- ===== Float =====
 local function updateFloat()
     if not S.Float then
         if FloatBV then destroy(FloatBV); FloatBV = nil end
@@ -368,7 +421,6 @@ local function updateFloat()
     end
     local root = getRoot(); if not root then return end
     if not FloatBV or not FloatBV.Parent then
-        if FloatBV then FloatBV = nil end
         FloatBV = Instance.new("BodyVelocity")
         FloatBV.MaxForce = Vector3.new(0, math.huge, 0)
         FloatBV.P = 1250; FloatBV.Parent = root
@@ -376,6 +428,7 @@ local function updateFloat()
     FloatBV.Velocity = Vector3.zero
 end
 
+-- ===== Anchor =====
 local function setAnchor(state)
     local char = getChar(); if not char then return end
     if state then
@@ -390,6 +443,7 @@ local function setAnchor(state)
     end
 end
 
+-- ===== Vehicle Fly =====
 local function stopVehicleFly()
     if VehicleBV then destroy(VehicleBV); VehicleBV = nil end
     if VehicleBG then destroy(VehicleBG); VehicleBG = nil end
@@ -402,7 +456,6 @@ local function updateVehicleFly()
     if not vehicle then stopVehicleFly(); return end
     local primary = vehicle.PrimaryPart or vehicle:FindFirstChildWhichIsA("BasePart")
     if not primary then return end
-
     if not VehicleBV or not VehicleBV.Parent or VehicleBV.Parent ~= primary then
         stopVehicleFly()
         VehicleBV = Instance.new("BodyVelocity")
@@ -412,12 +465,8 @@ local function updateVehicleFly()
         VehicleBG.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
         VehicleBG.P = 9e4; VehicleBG.D = 500; VehicleBG.Parent = primary
     end
-
-    local hum = getHum()
-    local cam = Workspace.CurrentCamera
-    if not hum or not cam then return end
-
-    local moveDir = hum.MoveDirection
+    local cam = Workspace.CurrentCamera; if not cam then return end
+    local moveDir = getCameraRelativeMoveDir()
     if UIS:IsKeyDown(Enum.KeyCode.Space) then moveDir = moveDir + Vector3.new(0, 1, 0) end
     if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir = moveDir - Vector3.new(0, 1, 0) end
     if moveDir.Magnitude > 0.01 then moveDir = moveDir.Unit end
@@ -425,6 +474,111 @@ local function updateVehicleFly()
     VehicleBG.CFrame = cam.CFrame
 end
 
+-- ===== Force Fly / Player Effects (BUG FIXES) =====
+local MAX_EFFECTS = 5
+
+local function stopPlayerEffect(targetPlayer)
+    if not targetPlayer then return end
+    local eff = PlayerEffects[targetPlayer]
+    if not eff then return end
+    PlayerEffects[targetPlayer] = nil -- FIX: remove first to prevent double-destroy
+    if eff.bv then pcall(function() eff.bv:Destroy() end) end
+    if eff.bg then pcall(function() eff.bg:Destroy() end) end
+    if eff.bav then pcall(function() eff.bav:Destroy() end) end
+    if eff.conn then pcall(function() eff.conn:Disconnect() end) end
+    if targetPlayer.Character then
+        local h = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if h then
+            pcall(function()
+                h.PlatformStand = false
+                h:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end)
+        end
+    end
+end
+
+local function stopAllPlayerEffects()
+    -- FIX: snapshot keys before modifying
+    local snapshot = {}
+    for pl in pairs(PlayerEffects) do table.insert(snapshot, pl) end
+    for _, pl in ipairs(snapshot) do stopPlayerEffect(pl) end
+end
+
+local function countEffects()
+    local n = 0
+    for _ in pairs(PlayerEffects) do n = n + 1 end
+    return n
+end
+
+local function forceFlyPlayer(targetPlayer, mode)
+    if not targetPlayer then safeNotify("Force Fly", "Player not found.", 2); return end
+    if targetPlayer == LP then safeNotify("Force Fly", "Can't force fly yourself.", 2); return end
+    if not targetPlayer.Character then safeNotify("Force Fly", "Player has no character.", 2); return end
+    local root = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+    local hum = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if not root or not hum then safeNotify("Force Fly", "Missing root/humanoid.", 2); return end
+
+    -- FIX: cap concurrent effects unless we're replacing one for this player
+    if not PlayerEffects[targetPlayer] and countEffects() >= MAX_EFFECTS then
+        safeNotify("Force Fly", "Max " .. MAX_EFFECTS .. " effects. Stop some first.", 3)
+        return
+    end
+
+    stopPlayerEffect(targetPlayer)
+
+    local eff = { type = mode }
+
+    -- FIX: create body movers BEFORE setting PlatformStand so they don't fall during transition
+    if mode == "lift" then
+        eff.bv = Instance.new("BodyVelocity")
+        eff.bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        eff.bv.Velocity = Vector3.new(0, 200, 0)
+        eff.bv.P = 1250; eff.bv.Parent = root
+    elseif mode == "hover" then
+        eff.bv = Instance.new("BodyVelocity")
+        eff.bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        eff.bv.Velocity = Vector3.zero
+        eff.bv.P = 1250; eff.bv.Parent = root
+    elseif mode == "spin" then
+        eff.bav = Instance.new("BodyAngularVelocity")
+        eff.bav.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+        eff.bav.AngularVelocity = Vector3.new(0, 60, 0)
+        eff.bav.P = 1250; eff.bav.Parent = root
+    elseif mode == "carry" then
+        eff.bv = Instance.new("BodyVelocity")
+        eff.bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        eff.bv.P = 1250; eff.bv.Parent = root
+        eff.conn = RunService.Heartbeat:Connect(function()
+            local myRoot = getRoot()
+            if not myRoot or not root.Parent or not hum.Parent then
+                stopPlayerEffect(targetPlayer); return
+            end
+            local targetPos = myRoot.CFrame * CFrame.new(0, 3, -6)
+            local delta = targetPos.Position - root.Position
+            eff.bv.Velocity = delta * 10
+        end)
+    end
+
+    -- FIX: set PlatformStand AFTER body movers exist
+    pcall(function() hum.PlatformStand = true end)
+    PlayerEffects[targetPlayer] = eff
+
+    -- FIX: only cleanup when character is actually destroyed (newParent == nil)
+    local charConn
+    charConn = targetPlayer.Character.AncestryChanged:Connect(function(_, newParent)
+        if newParent ~= nil then return end
+        task.wait(1)
+        if PlayerEffects[targetPlayer] == eff then
+            stopPlayerEffect(targetPlayer)
+        end
+        if charConn then pcall(function() charConn:Disconnect() end) end
+    end)
+
+    local label = ({lift = "going up", hover = "hovering", spin = "spinning", carry = "following you"})[mode] or mode
+    safeNotify("Force Fly", targetPlayer.Name .. " is " .. label .. ".", 3)
+end
+
+-- ===== Godmode =====
 local function applyGodmode()
     if not S.Godmode then return end
     local char, hum = getChar(), getHum(); if not char or not hum then return end
@@ -452,6 +606,7 @@ local function setNoclip(state)
     if not state then S.OriginalCollisions = {} end
 end
 
+-- ===== ESP =====
 local function createESP(target, color, labelText)
     if not target or ESPObjects[target] then return end
     local root = target:FindFirstChild("HumanoidRootPart"); if not root then return end
@@ -480,7 +635,9 @@ local function removeESP(target)
 end
 
 local function cleanupAllESP()
-    for target, _ in pairs(ESPObjects) do removeESP(target) end
+    local snapshot = {}
+    for target in pairs(ESPObjects) do table.insert(snapshot, target) end
+    for _, target in ipairs(snapshot) do removeESP(target) end
     ESPObjects = {}
 end
 
@@ -517,6 +674,7 @@ local function applyFullbright()
     end
 end
 
+-- ===== Actions =====
 local function teleportToPlayer(targetPlayer)
     if not targetPlayer or not targetPlayer.Character then safeNotify("Teleport", "Player not found.", 2); return end
     local root = getRoot()
@@ -590,6 +748,16 @@ local function freezeAll()
     safeNotify("Freeze All", "Froze " .. n .. " players.", 2)
 end
 
+local function unfreezeAll()
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LP and p.Character then
+            local h = p.Character:FindFirstChildOfClass("Humanoid")
+            if h then pcall(function() h.WalkSpeed = 16; h.JumpPower = 50 end) end
+        end
+    end
+    safeNotify("Unfreeze All", "Unfroze everyone.", 2)
+end
+
 local function spamHorns()
     for _, obj in ipairs(Workspace:GetDescendants()) do
         if obj:IsA("VehicleSeat") or (obj:IsA("BasePart") and obj.Name:lower():find("horn")) then
@@ -637,7 +805,7 @@ local function feedSelf()
     if char then
         local function fillStats(parent)
             for _, obj in ipairs(parent:GetDescendants()) do
-                if (obj:IsA("NumberValue") or obj:IsA("IntValue")) then
+                if obj:IsA("NumberValue") or obj:IsA("IntValue") then
                     local n = obj.Name:lower()
                     if n:find("hunger") or n:find("thirst") or n:find("food") or n:find("water") then
                         pcall(function() obj.Value = 100 end)
@@ -688,7 +856,116 @@ local function ejectSelf()
     end
 end
 
-local function findPlayerByPrefix(prefix)
+local function killPlayer(targetPlayer)
+    if not targetPlayer or not targetPlayer.Character then safeNotify("Kill", "Player not found.", 2); return end
+    local h = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if h then
+        pcall(function() h.Health = 0 end)
+        safeNotify("Kill", "Attempted kill on " .. targetPlayer.Name, 2)
+    end
+end
+
+local function freezePlayer(targetPlayer)
+    if not targetPlayer or not targetPlayer.Character then safeNotify("Freeze", "Player not found.", 2); return end
+    local h = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if h then
+        pcall(function() h.WalkSpeed = 0; h.JumpPower = 0 end)
+        safeNotify("Freeze", "Froze " .. targetPlayer.Name, 2)
+    end
+end
+
+local function unfreezePlayer(targetPlayer)
+    if not targetPlayer or not targetPlayer.Character then safeNotify("Unfreeze", "Player not found.", 2); return end
+    local h = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if h then
+        pcall(function() h.WalkSpeed = 16; h.JumpPower = 50 end)
+        safeNotify("Unfreeze", "Unfroze " .. targetPlayer.Name, 2)
+    end
+end
+
+local function flingPlayer(targetPlayer)
+    if not targetPlayer or not targetPlayer.Character then safeNotify("Fling", "Player not found.", 2); return end
+    local tr = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if tr then
+        pcall(function()
+            tr.AssemblyLinearVelocity = Vector3.new(math.random(-2000,2000), 2000, math.random(-2000,2000))
+        end)
+        safeNotify("Fling", "Flung " .. targetPlayer.Name, 2)
+    end
+end
+
+local function resetPlayer(targetPlayer)
+    if not targetPlayer or not targetPlayer.Character then safeNotify("Reset", "Player not found.", 2); return end
+    local h = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if h then
+        pcall(function() h.Health = 0 end)
+        safeNotify("Reset", "Reset " .. targetPlayer.Name, 2)
+    end
+end
+
+local function healPlayer(targetPlayer)
+    if not targetPlayer or not targetPlayer.Character then safeNotify("Heal", "Player not found.", 2); return end
+    local h = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if h then
+        pcall(function() h.Health = h.MaxHealth end)
+        safeNotify("Heal", "Healed " .. targetPlayer.Name, 2)
+    end
+end
+
+local function setSpeedPlayer(targetPlayer, speed)
+    if not targetPlayer or not targetPlayer.Character then safeNotify("Speed", "Player not found.", 2); return end
+    local h = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if h then
+        pcall(function() h.WalkSpeed = speed end)
+        safeNotify("Speed", targetPlayer.Name .. " speed = " .. speed, 2)
+    end
+end
+
+local function setJumpPlayer(targetPlayer, power)
+    if not targetPlayer or not targetPlayer.Character then safeNotify("Jump", "Player not found.", 2); return end
+    local h = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if h then
+        pcall(function() h.UseJumpPower = true; h.JumpPower = power end)
+        safeNotify("Jump", targetPlayer.Name .. " jump = " .. power, 2)
+    end
+end
+
+local function showAge(targetPlayer)
+    if not targetPlayer then safeNotify("Age", "Player not found.", 2); return end
+    local ok2, age = pcall(function() return targetPlayer.AccountAge end)
+    if ok2 and age then
+        safeNotify("Age", targetPlayer.Nameprefix .. " is " .. age .. " days old", 4)
+    else
+        safeNotify("Age", "Could not get age", 2)
+    end
+end
+
+local function setTimeOfDay(preset)
+    local times = {day = 12, noon = 12, night = 0, midnight = 0, morning = 7, evening = 18, sunset = 18}
+    local t = times[preset:lower()]
+    if t then
+        pcall(function() Lighting.ClockTime = t end)
+        safeNotify("Time", "Set to " .. preset, 2)
+    else
+        safeNotify("Time", "Options: day, night, noon, midnight, morning, evening, sunset", 3)
+    end
+end
+
+local function toggleFog(state)
+    if state then
+        pcall(function() Lighting.FogEnd = 500; Lighting.FogStart = 50 end)
+        safeNotify("Fog", "Fog ON", 2)
+    else
+        pcall(function()
+            Lighting.FogEnd = S.OriginalLighting.FogEnd
+            Lighting.FogStart = S.OriginalLighting.FogStart
+        end)
+        safeNotify("Fog", "Fog OFF", 2)
+    end
+end
+
+-- ===== Prefix Finder =====
+local function findPlayerByPrefix()
     if not prefix or prefix == "" then return nil end
     local p = prefix:lower()
     if p == "r" or p == "random" then
@@ -715,6 +992,7 @@ local function findPlayerByPrefix(prefix)
     return prefixMatch
 end
 
+-- ===== Command Parser =====
 local function executeCommand(text)
     if not text then return end
     text = text:gsub("^;", ""):gsub("^/", ""):gsub("^%s+", ""):gsub("%s+$", "")
@@ -724,6 +1002,7 @@ local function executeCommand(text)
     local cmd = args[1]:lower()
     local a1 = args[2]; local a2 = args[3]
 
+    -- Self
     if cmd == "fly" then S.Fly = true; startFly(); safeNotify("Cmd", "Fly ON", 2)
     elseif cmd == "unfly" then S.Fly = false; stopFly(); safeNotify("Cmd", "Fly OFF", 2)
     elseif cmd == "speed" then local n = tonumber(a1); if n then S.Speed = n; S.SpeedEnabled = true; safeNotify("Cmd", "Speed = " .. n, 2) end
@@ -733,14 +1012,39 @@ local function executeCommand(text)
     elseif cmd == "clip" or cmd == "unnoclip" then S.Noclip = false; setNoclip(false); safeNotify("Cmd", "Noclip OFF", 2)
     elseif cmd == "god" then S.Godmode = true; safeNotify("Cmd", "God ON", 2)
     elseif cmd == "ungod" then S.Godmode = false; safeNotify("Cmd", "God OFF", 2)
-    elseif cmd == "heal" then healSelf()
+    elseif cmd == "heal" then
+        if a1 then local t = findPlayerByPrefix(a1); if t then healPlayer(t) end
+        else healSelf() end
     elseif cmd == "feed" then feedSelf()
-    elseif cmd == "invisible" then S.Invisible = true; applyInvisibility(); safeNotify("Cmd", "Invisible ON", 2)
-    elseif cmd == "visible" then S.Invisible = false; applyInvisibility(); safeNotify("Cmd", "Visible", 2)
+    elseif cmd == "invisible" then
+        if a1 then
+            local t = findPlayerByPrefix(a1)
+            if t and t.Character then
+                for _, pt in ipairs(t.Character:GetDescendants()) do
+                    if pt:IsA("BasePart") then pcall(function() pt.Transparency = 1 end) end
+                end
+                safeNotify("Invisible", t.Name .. " hidden (local)", 2)
+            end
+        else
+            S.Invisible = true; applyInvisibility(); safeNotify("Cmd", "Invisible ON", 2)
+        end
+    elseif cmd == "visible" then
+        if a1 then
+            local t = findPlayerByPrefix(a1)
+            if t and t.Character then
+                for _, pt in ipairs(t.Character:GetDescendants()) do
+                    if pt:IsA("BasePart") then pcall(function() pt.Transparency = 0 end) end
+                end
+            end
+        else
+            S.Invisible = false; applyInvisibility(); safeNotify("Cmd", "Visible", 2)
+        end
     elseif cmd == "tpwalk" then S.TpWalk = not S.TpWalk; safeNotify("Cmd", "TpWalk: " .. tostring(S.TpWalk), 2)
     elseif cmd == "wallwalk" then S.WallWalk = not S.WallWalk; safeNotify("Cmd", "WallWalk: " .. tostring(S.WallWalk), 2)
     elseif cmd == "float" then S.Float = not S.Float; safeNotify("Cmd", "Float: " .. tostring(S.Float), 2)
     elseif cmd == "anchor" then S.Anchor = not S.Anchor; setAnchor(S.Anchor); safeNotify("Cmd", "Anchor: " .. tostring(S.Anchor), 2)
+
+    -- Target
     elseif cmd == "goto" or cmd == "tp" then
         local targetStr = a1
         if targetStr and targetStr:lower() == "to" then targetStr = a2 end
@@ -764,56 +1068,101 @@ local function executeCommand(text)
             local target = findPlayerByPrefix(targetStr)
             if target then stareAt(target) end
         end
+    elseif cmd == "kill" then
+        if a1 then local t = findPlayerByPrefix(a1); if t then killPlayer(t) end
+        else safeNotify("Cmd", "Usage: ;kill ca", 2) end
+    elseif cmd == "freeze" then
+        if a1 then local t = findPlayerByPrefix(a1); if t then freezePlayer(t) end
+        else freezeAll() end
+    elseif cmd == "unfreeze" then
+        if a1 then local t = findPlayerByPrefix(a1); if t then unfreezePlayer(t) end
+        else unfreezeAll() end
+    elseif cmd == "fling" then
+        if a1 then local t = findPlayerByPrefix(a1); if t then flingPlayer(t) end
+        else flingAll() end
+    elseif cmd == "reset" then
+        if a1 then
+            local t = findPlayerByPrefix(a1)
+            if t then resetPlayer(t) end
+        else
+            local h = getHum(); if h then h.Health = 0 end
+            safeNotify("Cmd", "Reset self", 2)
+        end
+    elseif cmd == "ws" or cmd == "setspeed" then
+        if a1 and a2 then
+            local n = tonumber(a2)
+            if n then
+                local t = findPlayerByPrefix(a1)
+                if t then setSpeedPlayer(t, n) end
+            else safeNotify("Cmd", "Number needed: ;ws ca 100", 2) end
+        else safeNotify("Cmd", "Usage: ;ws ca 100", 2) end
+    elseif cmd == "jp" or cmd == "setjump" then
+        if a1 and a2 then
+            local n = tonumber(a2)
+            if n then
+                local t = findPlayerByPrefix(a1)
+                if t then setJumpPlayer(t, n) end
+            else safeNotify("Cmd", "Number needed: ;jp ca 100", 2) end
+        else safeNotify("Cmd", "Usage: ;jp ca 100", 2) end
+    elseif cmd == "age" then
+        if a1 then local t = findPlayerByPrefix(a1); if t then showAge(t) end
+        else showAge(LP) end
+
+    -- Force Fly
+    elseif cmd == "ff" or cmd == "flyplayer" then
+        if a1 then
+            local t = findPlayerByPrefix(a1)
+            if t then forceFlyPlayer(t, a2 or "lift")
+            else safeNotify("Cmd", "No player matching: " .. a1, 2) end
+        else safeNotify("Cmd", "Usage: ;ff ca lift/hover/spin/carry", 3) end
+    elseif cmd == "stopfly" then
+        if a1 then
+            local t = findPlayerByPrefix(a1)
+            if t then stopPlayerEffect(t); safeNotify("Cmd", "Stopped " .. t.Name, 2)
+            else safeNotify("Cmd", "No player matching: " .. a1, 2) end
+        else stopAllPlayerEffects(); safeNotify("Cmd", "St foropped all effects", 2) end
+    elseif cmd == "stopall" then
+        stopAllPlayerEffects(); safeNotify("Cmd", "Stopped all effects", 2)
+
+    -- Global
+    elseif cmd == "bringall" then bringAllPlayers()
+    elseif cmd == "flingall" then flingAll()
+    elseif cmd == "unfreezeall" then unfreezeAll()
+
+    -- Utility
+    elseif cmd == "time" then
+        if a1 then setTimeOfDay(a1) else safeNotify("Cmd", "Usage: ;time day", 2) end
+    elseif cmd == "fog" then
+        if a1 == "on" then toggleFog(true)
+        elseif a1 == "off" then toggleFog(false)
+        else toggleFog(true) end
     elseif cmd == "rejoin" then pcall(function() TeleportService:Teleport(game.PlaceId, LP) end)
     elseif cmd == "help" then
-        safeNotify("Commands", "fly, unfly, speed N, jump N, gravity N, noclip, clip, god, ungod, heal, feed, invisible, visible, tpwalk, wallwalk, float, anchor | tp to X | bring to X | stare to X | rejoin", 8)
-    else safeNotify("Cmd", "Unknown command: " .. cmd, 2) end
+        safeNotify("Help 1/3", "SELF: fly, unfly, speed N, jump N, gravity N, noclip, clip, god, ungod, heal, feed, invisible, visible, tpwalk, wallwalk, float, anchor", 10)
+        task.wait(0.5)
+        safeNotify("Help 2/3", "TARGET: ;tp to X, ;bring X, ;stare X, ;kill X, ;freeze X, ;unfreeze X, ;fling X, ;reset X, ;heal X, ;ws X N, ;jp X N, ;age X, ;invisible X, ;visible X", 10)
+        task.wait(0.5)
+        safeNotify("Help 3/3", "FORCE FLY: ;ff X lift/hover/spin/carry, ;stopfly X, ;stopall | GLOBAL: ;freeze, ;fling, ;bringall, ;flingall, ;unfreezeall | WORLD: ;time day/night, ;fog on/off, ;rejoin", 10)
+    else safeNotify("Cmd", "Unknown: " .. cmd .. " (type ;help)", 2) end
 end
 
+-- ===== Chat handler =====
 track(LP.Chatted:Connect(function(message)
     if not message or message == "" then return end
     local lower = message:lower():gsub("^%s+", ""):gsub("%s+$", "")
     if lower:sub(1, 1) ~= ";" and lower:sub(1, 1) ~= "/" then return end
-
-    local tpTarget = lower:match("^[;/]tp%s+to%s+(.+)$")
-    if not tpTarget then tpTarget = lower:match("^[;/]tp%s+(.+)$") end
-    if not tpTarget then tpTarget = lower:match("^[;/]goto%s+to%s+(.+)$") end
-    if not tpTarget then tpTarget = lower:match("^[;/]goto%s+(.+)$") end
-    if tpTarget then
-        tpTarget = tpTarget:gsub("%s+$", "")
-        local target = findPlayerByPrefix(tpTarget)
-        if target then teleportToPlayer(target); safeNotify("Chat", "Teleported to " .. target.Name, 2)
-        else safeNotify("Chat", "No player matching: " .. tpTarget, 2) end
-        return
-    end
-
-    local bringTarget = lower:match("^[;/]bring%s+to%s+(.+)$")
-    if not bringTarget then bringTarget = lower:match("^[;/]bring%s+(.+)$") end
-    if bringTarget then
-        bringTarget = bringTarget:gsub("%s+$", "")
-        local target = findPlayerByPrefix(bringTarget)
-        if target then bringPlayer(target); safeNotify("Chat", "Brought " .. target.Name, 2)
-        else safeNotify("Chat", "No player matching: " .. bringTarget, 2) end
-        return
-    end
-
-    local stareTarget = lower:match("^[;/]stare%s+to%s+(.+)$")
-    if not stareTarget then stareTarget = lower:match("^[;/]stare%s+(.+)$") end
-    if stareTarget then
-        stareTarget = stareTarget:gsub("%s+$", "")
-        local target = findPlayerByPrefix(stareTarget)
-        if target then stareAt(target) end
-        return
-    end
-
     pcall(executeCommand, message)
 end))
 
+-- ===== Main heartbeat =====
 local mainHB = RunService.Heartbeat:Connect(function(dt)
-    if S.Fly then updateFly(dt) end
+    if S.Fly then
+        if not FlyBV or not FlyBV.Parent then startFly() end
+        updateFly(dt)
+    end
     if S.TpWalk then updateTpWalk(dt) end
     if S.WallWalk then updateWallWalk(dt) end
-    if S.Float then updateFloat() else if FloatBV then destroy(FloatBV); FloatBV = nil end end
+    if S.Float then updateFloat() end
     if S.VehicleFly then updateVehicleFly() else stopVehicleFly() end
     if S.Godmode then applyGodmode() end
     if S.Noclip then setNoclip(true) end
@@ -835,7 +1184,6 @@ local mainHB = RunService.Heartbeat:Connect(function(dt)
             local spawn = Workspace:FindFirstChildOfClass("SpawnLocation")
             if spawn then root.CFrame = spawn.CFrame + Vector3.new(0, 5, 0)
             else root.CFrame = CFrame.new(0, 50, 0) end
-            safeNotify("Anti-Void", "Teleported back.", 2)
         end
     end
 
@@ -862,7 +1210,7 @@ local mainHB = RunService.Heartbeat:Connect(function(dt)
                     pcall(function() p.Color = RGBColor; p.Material = Enum.Material.Neon end)
                 end
             end
-            for _, a in ipairs(char:GetChildren()) do
+            _, a in ipairs(char:GetChildren()) do
                 if a:IsA("Accessory") then
                     for _, p in ipairs(a:GetDescendants()) do
                         if p:IsA("BasePart") then pcall(function() p.Color = RGBColor end) end
@@ -892,19 +1240,34 @@ track(LP.CharacterAdded:Connect(function(char)
         if cam then cam.CameraSubject = hum end
     end
     if S.Noclip then S.OriginalCollisions = {}; setNoclip(true) end
-    if S.Fly then task.wait(0.2); startFly() end
     if S.Anchor then S.OriginalAnchored = {}; setAnchor(true) end
     if S.Invisible then applyInvisibility() end
 end))
 
+track(Players.PlayerAdded:Connect(function()
+    task.wait(1)
+    refreshPlayerList()
+    if selectedDropdown and selectedDropdown.Refresh then
+        pcall(function() selectedDropdown:Refresh(playerList) end)
+    end
+end))
+
 track(Players.PlayerRemoving:Connect(function(pl)
+    if PlayerEffects[pl] then stopPlayerEffect(pl) end
+    if S.SelectedPlayer == pl then S.SelectedPlayer = nil end
     if StareTarget == pl then
         StareTarget = nil
         local cam = Workspace.CurrentCamera
         if cam then cam.CameraSubject = getHum() end
     end
+    task.wait(0.5)
+    refreshPlayerList()
+    if selectedDropdown and selectedDropdown.Refresh then
+        pcall(function() selectedDropdown:Refresh(playerList) end)
+    end
 end))
 
+-- ===== Background loops =====
 task.spawn(function()
     while true do
         task.wait(60)
@@ -971,12 +1334,13 @@ end)
 
 loadSongs()
 
+-- ===== UI BUILD =====
 print("[Shaw Hub] Step 3: Building UI...")
 
 local Window = Rayfield:CreateWindow({
     Name = "Shaw Brookhaven Hub",
     LoadingTitle = "Shaw Hub",
-    LoadingSubtitle = "v3.3",
+    LoadingSubtitle = "v3.5",
     ConfigurationSaving = { Enabled = true, FolderName = "ShawBHub", FileName = "Config" },
     KeySystem = false,
     ToggleUIKeybind = "K"
@@ -998,10 +1362,11 @@ local SetTab = Window:CreateTab("Settings", 4483362458)
 
 print("[Shaw Hub] Step 5: Adding components...")
 
+-- ===== MAIN TAB =====
 MainTab:CreateSection("Command Bar")
 MainTab:CreateInput({
     Name = "Command",
-    PlaceholderText = ";tp to r | ;tp to ca | ;bring to r | ;speed 100 | ;fly",
+    PlaceholderText = ";tp to r | ;bring ca | ;ff ca lift | ;help",
     RemoveTextAfterFocusLost = true,
     Flag = "CmdInput",
     Callback = function(text) if text and text ~= "" then pcall(executeCommand, text) end end
@@ -1011,9 +1376,9 @@ MainTab:CreateSection("Movement")
 MainTab:CreateSlider({ Name = "Walk Speed", Range = {16, 300}, Increment = 1, Suffix = "studs", CurrentValue = 16, Flag = "SpeedSlider", Callback = function(v) S.Speed = v; S.SpeedEnabled = true end })
 MainTab:CreateSlider({ Name = "Jump Power", Range = {50, 500}, Increment = 5, Suffix = "power", CurrentValue = 50, Flag = "JumpSlider", Callback = function(v) S.JumpPower = v; S.JumpEnabled = true end })
 MainTab:CreateSlider({ Name = "Gravity", Range = {0, 500}, Increment = 5, Suffix = "", CurrentValue = 196, Flag = "GravSlider", Callback = function(v) S.Gravity = v; S.GravityEnabled = true end })
-MainTab:CreateToggle({ Name = "Fly (joystick / WASD)", CurrentValue = false, Flag = "FlyToggle", Callback = function(v) S.Fly = v; if v then startFly() else stopFly() end end })
+MainTab:CreateToggle({ Name = "Fly (Camera-relative)", CurrentValue = false, Flag = "FlyToggle", Callback = function(v) S.Fly = v; if v then startFly() else stopFly() end end })
 MainTab:CreateSlider({ Name = "Fly Speed", Range = {20, 300}, Increment = 5, Suffix = "studs", CurrentValue = 60, Flag = "FlySpeedSlider", Callback = function(v) S.FlySpeed = v end })
-MainTab:CreateParagraph({ Title = "Fly Controls", Content = "PC: WASD | Space up | Left Shift down.\nMobile: joystick to move. Aim camera up + push forward to ascend." })
+MainTab:CreateParagraph({ Title = "Fly Controls", Content = "Move: camera-relative. Push joystick / WASD forward and you fly where the camera is looking.\nPC Vertical: Space (up) / Left Shift (down)" })
 MainTab:CreateToggle({ Name = "Noclip", CurrentValue = false, Flag = "NoclipToggle", Callback = function(v) S.Noclip = v; setNoclip(v) end })
 MainTab:CreateToggle({ Name = "Infinite Jump", CurrentValue = false, Flag = "InfJumpToggle", Callback = function(v) S.InfJump = v end })
 
@@ -1029,21 +1394,24 @@ MainTab:CreateSection("Actions")
 MainTab:CreateButton({ Name = "Heal", Callback = function() healSelf() end })
 MainTab:CreateButton({ Name = "Feed", Callback = function() feedSelf() end })
 
+-- ===== VEHICLE TAB =====
 VehicleTab:CreateSection("Vehicle Fly")
 VehicleTab:CreateToggle({ Name = "Vehicle Fly", CurrentValue = false, Flag = "VehFlyToggle", Callback = function(v) S.VehicleFly = v end })
 VehicleTab:CreateSlider({ Name = "Vehicle Fly Speed", Range = {20, 300}, Increment = 5, Suffix = "studs", CurrentValue = 60, Flag = "VehFlySpeedSlider", Callback = function(v) S.VehicleFlySpeed = v end })
-VehicleTab:CreateParagraph({ Title = "How to use", Content = "Sit in a vehicle, toggle Vehicle Fly. WASD / joystick to move. Space up, Shift down." })
+VehicleTab:CreateParagraph({ Title = "How to use", Content = "Sit in a vehicle, toggle Vehicle Fly. WASD / joystick moves camera-relative." })
 VehicleTab:CreateSection("Vehicle Actions")
 VehicleTab:CreateButton({ Name = "Teleport Vehicle to Selected Player", Callback = function() if S.SelectedPlayer then vehicleGoto(S.SelectedPlayer) else safeNotify("Vehicle", "Select a player first.", 2) end end })
 VehicleTab:CreateButton({ Name = "Drop Vehicle at My Position", Callback = function() dropVehicle() end })
 VehicleTab:CreateButton({ Name = "Eject from Vehicle", Callback = function() ejectSelf() end })
 
+-- ===== PROTECTION TAB =====
 ProtTab:CreateSection("Defense")
 ProtTab:CreateToggle({ Name = "Godmode", CurrentValue = false, Flag = "GodToggle", Callback = function(v) S.Godmode = v end })
 ProtTab:CreateToggle({ Name = "Anti-Void", CurrentValue = false, Flag = "AntiVoidToggle", Callback = function(v) S.AntiVoid = v end })
 ProtTab:CreateToggle({ Name = "Anti-Fling", CurrentValue = false, Flag = "AntiFlingToggle", Callback = function(v) S.AntiFling = v end })
 ProtTab:CreateToggle({ Name = "Anti-AFK", CurrentValue = false, Flag = "AntiAFKToggle", Callback = function(v) S.AntiAFK = v end })
 
+-- ===== VISUAL TAB =====
 VisTab:CreateSection("Rendering")
 VisTab:CreateToggle({ Name = "Player ESP", CurrentValue = false, Flag = "ESPToggle", Callback = function(v) S.ESP = v end })
 VisTab:CreateToggle({ Name = "Fullbright", CurrentValue = false, Flag = "BrightToggle", Callback = function(v) S.Fullbright = v end })
@@ -1052,6 +1420,7 @@ VisTab:CreateSection("RGB Character")
 VisTab:CreateToggle({ Name = "RGB Body", CurrentValue = false, Flag = "RGBToggle", Callback = function(v) S.RGB = v end })
 VisTab:CreateSlider({ Name = "RGB Speed", Range = {0.1, 3}, Increment = 0.1, Suffix = "x", CurrentValue = 1, Flag = "RGBSpeedSlider", Callback = function(v) S.RGBSpeed = v end })
 
+-- ===== MUSIC TAB =====
 MusicTab:CreateSection("Now Playing")
 local nowPlayingLabel = MusicTab:CreateParagraph({ Title = "Status", Content = "No song playing" })
 MusicTab:CreateSection("Play a Song")
@@ -1071,7 +1440,6 @@ MusicTab:CreateButton({
     Callback = function()
         stopMusic()
         pcall(function() nowPlayingLabel:Set({ Title = "Status", Content = "No song playing" }) end)
-        safeNotify("Music", "Music stopped.", 2)
     end
 })
 MusicTab:CreateSlider({ Name = "Volume", Range = {0, 100}, Increment = 5, Suffix = "%", CurrentValue = 50, Flag = "VolumeSlider", Callback = function(v) setMusicVolume(v / 100) end })
@@ -1090,7 +1458,6 @@ MusicTab:CreateButton({
     end
 })
 MusicTab:CreateSection("Saved Songs")
-local savedSongsDropdown
 savedSongsDropdown = MusicTab:CreateDropdown({
     Name = "Saved Songs",
     Options = (function()
@@ -1133,17 +1500,8 @@ MusicTab:CreateButton({
     end
 })
 
+-- ===== PLAYERS TAB =====
 PlayerTab:CreateSection("Player Selection")
-local playerList = {}
-local function refreshPlayerList()
-    playerList = {}
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LP then table.insert(playerList, p.Name) end
-    end
-end
-refreshPlayerList()
-
-local selectedDropdown
 selectedDropdown = PlayerTab:CreateDropdown({
     Name = "Select Player", Options = playerList, CurrentOption = {},
     MultipleOptions = false, Flag = "PlayerDropdown",
@@ -1153,32 +1511,43 @@ selectedDropdown = PlayerTab:CreateDropdown({
     end
 })
 
-track(Players.PlayerAdded:Connect(function()
-    task.wait(1); refreshPlayerList()
-    if selectedDropdown and selectedDropdown.Refresh then pcall(function() selectedDropdown:Refresh(playerList) end) end
-end))
-track(Players.PlayerRemoving:Connect(function()
-    task.wait(0.5); refreshPlayerList()
-    if selectedDropdown and selectedDropdown.Refresh then pcall(function() selectedDropdown:Refresh(playerList) end) end
-end))
-
+PlayerTab:CreateSection("Target Actions")
 PlayerTab:CreateButton({ Name = "Teleport to Selected", Callback = function() if S.SelectedPlayer then teleportToPlayer(S.SelectedPlayer) else safeNotify("Teleport", "Select a player first.", 2) end end })
+PlayerTab:CreateButton({ Name = "Bring Selected", Callback = function() if S.SelectedPlayer then bringPlayer(S.SelectedPlayer) else safeNotify("Bring", "Select a player first.", 2) end end })
 PlayerTab:CreateButton({ Name = "Copy Selected Avatar", Callback = function() if S.SelectedPlayer then copyAvatar(S.SelectedPlayer) else safeNotify("Copy Avatar", "Select a player first.", 2) end end })
 PlayerTab:CreateButton({ Name = "Stare at Selected", Callback = function() if S.SelectedPlayer then stareAt(S.SelectedPlayer) else safeNotify("Stare", "Select a player first.", 2) end end })
-PlayerTab:CreateButton({
-    Name = "Reset Camera",
-    Callback = function()
-        local cam = Workspace.CurrentCamera
-        if cam then cam.CameraSubject = getHum(); StareTarget = nil; safeNotify("Stare", "Camera reset.", 2) end
-    end
-})
-PlayerTab:CreateButton({ Name = "Bring All Players", Callback = function() bringAllPlayers() end })
+PlayerTab:CreateButton({ Name = "Kill Selected (best-effort)", Callback = function() if S.SelectedPlayer then killPlayer(S.SelectedPlayer) else safeNotify("Kill", "Select a player first.", 2) end end })
+PlayerTab:CreateButton({ Name = "Freeze Selected", Callback = function() if S.SelectedPlayer then freezePlayer(S.SelectedPlayer) else safeNotify("Freeze", "Select a player first.", 2) end end })
+PlayerTab:CreateButton({ Name = "Unfreeze Selected", Callback = function() if S.SelectedPlayer then unfreezePlayer(S.SelectedPlayer) else safeNotify("Unfreeze", "Select a player first.", 2) end end })
+PlayerTab:CreateButton({ Name = "Fling Selected", Callback = function() if S.SelectedPlayer then flingPlayer(S.SelectedPlayer) else safeNotify("Fling", "Select a player first.", 2) end end })
+PlayerTab:CreateButton({ Name = "Reset Selected", Callback = function() if S.SelectedPlayer then resetPlayer(S.SelectedPlayer) else safeNotify("Reset", "Select a player first.", 2) end end })
+PlayerTab:CreateButton({ Name = "Heal Selected", Callback = function() if S.SelectedPlayer then healPlayer(S.SelectedPlayer) else safeNotify("Heal", "Select a player first.", 2) end end })
+PlayerTab:CreateButton({ Name = "Show Account Age", Callback = function() if S.SelectedPlayer then showAge(S.SelectedPlayer) else safeNotify("Age", "Select a player first.", 2) end end })
 
-TrollTab:CreateSection("Actions")
+PlayerTab:CreateSection("Force Fly (make them fly)")
+PlayerTab:CreateButton({ Name = "Lift Selected (sky)", Callback = function() if S.SelectedPlayer then forceFlyPlayer(S.SelectedPlayer, "lift") else safeNotify("Force Fly", "Select a player first.", 2) end end })
+PlayerTab:CreateButton({ Name = "Hover Selected", Callback = function() if S.SelectedPlayer then forceFlyPlayer(S.SelectedPlayer, "hover") else safeNotify("Force Fly", "Select a player first.", 2) end end })
+PlayerTab:CreateButton({ Name = "Spin Selected", Callback = function() if S.SelectedPlayer then forceFlyPlayer(S.SelectedPlayer, "spin") else safeNotify("Force Fly", "Select a player first.", 2) end end })
+PlayerTab:CreateButton({ Name = "Carry Selected (follows you)", Callback = function() if S.SelectedPlayer then forceFlyPlayer(S.SelectedPlayer, "carry") else safeNotify("Force Fly", "Select a player first.", 2) end end })
+PlayerTab:CreateButton({ Name = "Stop Effect on Selected", Callback = function() if S.SelectedPlayer then stopPlayerEffect(S.SelectedPlayer) else safeNotify("Force Fly", "Select a player first.", 2) end end })
+
+PlayerTab:CreateSection("Global")
+PlayerTab:CreateButton({ Name = "Bring All Players", Callback = function() bringAllPlayers() end })
+PlayerTab:CreateButton({ Name = "Stop ALL Force Fly Effects", Callback = function() stopAllPlayerEffects(); safeNotify("Force Fly", "All stopped.", 2) end })
+
+-- ===== TROLL TAB =====
+TrollTab:CreateSection("Global Actions")
 TrollTab:CreateButton({ Name = "Fling All Players", Callback = function() flingAll() end })
 TrollTab:CreateButton({ Name = "Freeze All Players", Callback = function() freezeAll() end })
+TrollTab:CreateButton({ Name = "Unfreeze All Players", Callback = function() unfreezeAll() end })
 TrollTab:CreateButton({ Name = "Spam Horn", Callback = function() spamHorns() end })
+TrollTab:CreateSection("World Control")
+TrollTab:CreateButton({ Name = "Set Time: Day", Callback = function() setTimeOfDay("day") end })
+TrollTab:CreateButton({ Name = "Set Time: Night", Callback = function() setTimeOfDay("night") end })
+TrollTab:CreateButton({ Name = "Fog ON", Callback = function() toggleFog(true) end })
+TrollTab:CreateButton({ Name = "Fog OFF", Callback = function() toggleFog(false) end })
 
+-- ===== UTILITY TAB =====
 UtilTab:CreateSection("Gamepasses")
 UtilTab:CreateButton({ Name = "Attempt Unlock All Gamepasses", Callback = function() tryUnlockGamepasses() end })
 UtilTab:CreateSection("Auto Collect")
@@ -1201,55 +1570,30 @@ UtilTab:CreateButton({
     end
 })
 
+-- ===== INFO TAB =====
 InfoTab:CreateSection("About")
-InfoTab:CreateParagraph({ Title = "Shaw Brookhaven Hub v3.3", Content = "Polished Brookhaven hub with chat commands, joystick fly, music player, and Infinite Yield features." })
+InfoTab:CreateParagraph({ Title = "Shaw Brookhaven Hub v3.5", Content = "Camera-relative Fly + Force Fly + 40+ chat commands." })
 InfoTab:CreateSection("Credits")
 InfoTab:CreateParagraph({ Title = "Made by", Content = "Shaw" })
 InfoTab:CreateParagraph({ Title = "Discord", Content = "Shaw6000" })
 InfoTab:CreateSection("Chat Commands")
-InfoTab:CreateParagraph({
-    Title = "Type these in Brookhaven's chat",
-    Content = ";tp to r - teleport to a RANDOM player\n;tp to c - teleport to first player whose name starts with C\n;tp to ca - teleport to first player whose name starts with Ca\n;bring to r - bring a random player\n;stare to ca - stare at player starting with Ca"
-})
-InfoTab:CreateSection("Command Bar")
-InfoTab:CreateParagraph({
-    Title = "Type in the command bar or chat",
-    Content = "fly, unfly, speed N, jump N, gravity N, noclip, clip, god, ungod, heal, feed, invisible, visible, tpwalk, wallwalk, float, anchor, rejoin"
-})
-InfoTab:CreateSection("Controls")
-InfoTab:CreateParagraph({ Title = "UI Toggle", Content = "Press K to show/hide the menu." })
-InfoTab:CreateParagraph({ Title = "Fly (PC)", Content = "WASD to move | Space up | Left Shift down" })
-InfoTab:CreateParagraph({ Title = "Fly (Mobile)", Content = "Use the joystick to move. Tilt camera up + push forward to ascend." })
+InfoTab:CreateParagraph({ Title = "Self", Content = ";fly ;unfly ;speed N ;jump N ;gravity N ;noclip ;clip ;god ;ungod ;heal ;feed ;invisible ;visible ;tpwalk ;wallwalk ;float ;anchor ;reset ;age" })
+InfoTab:CreateParagraph({ Title = "Target (prefix match)", Content = ";tp to X ;bring X ;stare X ;kill X ;freeze X ;unfreeze X ;fling X ;reset X ;heal X ;ws X N ;jp X N ;age X ;invisible X ;visible X" })
+InfoTab:CreateParagraph({ Title = "Force Fly", Content = ";ff X lift ;ff X hover ;ff X spin ;ff X carry ;stopfly X ;stopall" })
+InfoTab:CreateParagraph({ Title = "Global", Content = ";freeze ;fling ;bringall ;flingall ;unfreezeall" })
+InfoTab:CreateParagraph({ Title = "Utility", Content = ";time day/night ;fog on/off ;rejoin ;help" })
 
-UpdateTab:CreateSection("v3.3 - Latest")
-UpdateTab:CreateParagraph({
-    Title = "Chat Commands Added",
-    Content = "- ;tp to r - teleport to a random player\n- ;tp to c - teleport to first player starting with C\n- ;tp to ca - use more letters to disambiguate\n- ;bring to r / ca - bring players by prefix\n- ;stare to ca - stare at players by prefix"
-})
-UpdateTab:CreateParagraph({
-    Title = "Fly System Rewrite",
-    Content = "- Removed button pad\n- Uses Humanoid.MoveDirection (works with mobile joystick)\n- PC: WASD + Space up + Shift down\n- Mobile: joystick + tilt camera up to ascend"
-})
-UpdateTab:CreateParagraph({
-    Title = "Bug Fixes",
-    Content = "- Anti-Fling no longer destroys Fly / Float / Vehicle Fly\n- StareTarget cleared when player leaves\n- Invisibility re-applied on respawn\n- Reset button resets Speed / Jump / Gravity sliders\n- Gamepass remote cache cleared on reset"
-})
-UpdateTab:CreateSection("v3.2 - Previous")
-UpdateTab:CreateParagraph({
-    Title = "Infinite Yield Features",
-    Content = "- TP Walk (raycast-based)\n- Wall Walk (hold Space)\n- Float\n- Anchor\n- Vehicle Fly + Vehicle Goto + Drop + Eject\n- Heal / Feed\n- Stare at Player\n- Keybinds (F/N/G/H)\n- Command bar"
-})
-UpdateTab:CreateSection("v3.0 - Older")
-UpdateTab:CreateParagraph({
-    Title = "Core Features",
-    Content = "- Godmode\n- Noclip\n- Fly\n- Speed / Jump / Gravity\n- Player ESP\n- Fullbright\n- Invisibility\n- RGB Character\n- Anti-Void / Anti-Fling / Anti-AFK\n- Bring All / Fling All / Freeze All\n- Auto Collect\n- Music Player with save system\n- Copy Avatar\n- Server Hop / Rejoin"
-})
+-- ===== UPDATE TAB =====
+UpdateTab:CreateSection("v3.5 - Latest")
+UpdateTab:CreateParagraph({ Title = "Force Fly Feature", Content = "Make other players fly, hover, spin, or follow you. From UI: Players tab > Force Fly section. From chat: ;ff ca lift" })
+UpdateTab:CreateParagraph({ Title = "Bug Fixes", Content = "Fixed: table iteration during stopAllPlayerEffects, ancestry cleanup firing too early, no concurrent effect limit, PlayerControls never retried, effect nil race condition, stale SelectedPlayer reference, slider reset" })
+UpdateTab:CreateSection("v3.4")
+UpdateTab:CreateParagraph({ Title = "Camera-relative Fly", Content = "Fly now moves where your camera is pointing, using PlayerModule:GetMoveVector() for mobile + PC support." })
+UpdateTab:CreateParagraph({ Title = "New Commands", Content = ";kill ;freeze ;unfreeze ;fling ;reset ;heal X ;ws X N ;jp X N ;age X ;invisible X ;time ;fog" })
 UpdateTab:CreateSection("Roadmap")
-UpdateTab:CreateParagraph({
-    Title = "Coming Soon",
-    Content = "- More chat commands (kill, freeze, fling by name)\n- Custom chat command prefix\n- Save keybinds to config\n- House teleport\n- Weather control"
-})
+UpdateTab:CreateParagraph({ Title = "Coming Soon", Content = "- Custom chat prefix\n- Save keybinds to config\n- House teleport\n- Weather particles (rain/snow)" })
 
+-- ===== SETTINGS TAB =====
 SetTab:CreateSection("Keybinds")
 SetTab:CreateKeybind({ Name = "Toggle Fly", CurrentKeybind = "F", HoldToInteract = false, Flag = "KbFly", Callback = function() S.Fly = not S.Fly; if S.Fly then startFly() else stopFly() end end })
 SetTab:CreateKeybind({ Name = "Toggle Noclip", CurrentKeybind = "N", HoldToInteract = false, Flag = "KbNoclip", Callback = function() S.Noclip = not S.Noclip; setNoclip(S.Noclip) end })
@@ -1270,21 +1614,24 @@ SetTab:CreateButton({
         S.TpWalk = false; S.WallWalk = false; S.Float = false
         S.Anchor = false; S.VehicleFly = false
         S.SelectedPlayer = nil
-        stopFly(); stopVehicleFly(); cleanupAllESP()
+        stopFly(); stopVehicleFly(); cleanupAllESP(); stopAllPlayerEffects()
         if FloatBV then destroy(FloatBV); FloatBV = nil end
         setNoclip(false); setAnchor(false); applyFullbright()
         CachedGPUnlockRemotes = nil
-        local flags = {
+        local toggles = {
             "GodToggle","NoclipToggle","FlyToggle","InfJumpToggle",
             "TpWalkToggle","WallWalkToggle","FloatToggle","AnchorToggle",
             "VehFlyToggle","ESPToggle","BrightToggle","InvisToggle",
             "RGBToggle","AutoCollectToggle","AntiVoidToggle",
             "AntiFlingToggle","AntiAFKToggle"
         }
-        for _, f in ipairs(flags) do pcall(function() Rayfield.Flags[f]:Set(false) end) end
+        for _, f in ipairs(toggles) do pcall(function() Rayfield.Flags[f]:Set(false) end) end
+        local sliders = {SpeedSlider = 16, JumpSlider = 50, GravSlider = 196, FlySpeedSlider = 60, TpWalkSpeedSlider = 20, WallWalkSpeedSlider = 50, VehFlySpeedSlider = 60, RGBSpeedSlider = 1, VolumeSlider = 50}
+        for f, val in pairs(sliders) do pcall(function() Rayfield.Flags[f]:Set(val) end) end
         safeNotify("Reset", "All features disabled.", 2)
     end
 })
+
 SetTab:CreateSection("Music Data")
 SetTab:CreateButton({
     Name = "Clear All Saved Songs",
@@ -1296,8 +1643,9 @@ SetTab:CreateButton({
 })
 SetTab:CreateButton({ Name = "Unload Hub", Callback = function() if getgenv().ShawBHub then pcall(getgenv().ShawBHub) end end })
 
+-- ===== CLEANUP =====
 getgenv().ShawBHub = function()
-    stopFly(); stopVehicleFly(); stopMusic()
+    stopFly(); stopVehicleFly(); stopMusic(); stopAllPlayerEffects()
     S.Godmode = false; S.Noclip = false; S.ESP = false; S.RGB = false
     S.Invisible = false; S.AntiVoid = false; S.AntiFling = false
     S.AutoCollect = false; S.Fly = false; S.TpWalk = false
@@ -1337,27 +1685,20 @@ getgenv().ShawBHub = function()
     Lighting.Brightness = S.OriginalLighting.Brightness
     Lighting.FogEnd = S.OriginalLighting.FogEnd
     Lighting.FogStart = S.OriginalLighting.FogStart
+    Lighting.ClockTime = S.OriginalLighting.ClockTime
     pcall(function() Rayfield:Destroy() end)
     safeNotify("Shaw Hub", "Unloaded successfully.", 2)
 end
 
 print("[Shaw Hub] Step 6: All components loaded")
-
-safeNotify("Shaw Brookhaven Hub v3.3", "Loaded! Chat ;tp to r. Press K for UI.", 6)
-print("[Shaw Brookhaven Hub v3.3] Loaded successfully")
+safeNotify("Shaw Brookhaven Hub v3.5", "Loaded! Chat ;help. Press K for UI.", 6)
+print("[Shaw Brookhaven Hub v3.5] Loaded successfully")
 
 end)
 
 if not ok then
     warn("[Shaw Hub] FAILED: " .. tostring(err))
     pcall(function()
-        local pg = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
-        if pg then
-            for _, v in ipairs(pg:GetChildren()) do
-                if v.Name == "ShawBrookhavenHub" or v.Name == "ShawFlyPad" or v.Name == "Rayfield" then
-                    v:Destroy()
-                end
-            end
-        end
+        if getgenv().ShawBHub then getgenv().ShawBHub() end
     end)
 end
