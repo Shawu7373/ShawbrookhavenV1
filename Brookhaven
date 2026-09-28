@@ -1,5 +1,5 @@
 --// ====================================================================
---// SHAW BROOKHAVEN HUB v3.1
+--// SHAW BROOKHAVEN HUB v3.2
 --// Made by: Shaw | Discord: Shaw6000
 --// ====================================================================
 
@@ -48,38 +48,58 @@ local function safeNotify(title, text, duration)
     end
 end
 
---// ======================== LOAD RAYFIELD ========================
+--// ======================== LOAD RAYFIELD (FIXED) ========================
 local Rayfield
 local rayfieldSources = {
     "https://sirius.menu/rayfield",
     "https://raw.githubusercontent.com/shlexware/Rayfield/main/source.lua",
-    "https://rayfield.menu/api/load",
-    "https://rawscripts.net/raw/Rayfield-UI-Library_165"
+    "https://raw.githubusercontent.com/Footagesus/Rayfield/main/source.lua",
+    "https://raw.githubusercontent.com/luau-libraries/Rayfield/main/source.lua",
+    "https://rayfield.menu/api/load"
 }
 
 for i, url in ipairs(rayfieldSources) do
-    print("[Shaw Hub] Trying Rayfield source " .. i .. "/4")
-    local ok, err = pcall(function()
+    print("[Shaw Hub] Trying Rayfield source " .. i .. "/" .. #rayfieldSources)
+    local ok, result = pcall(function()
         local source = game:HttpGet(url)
         if not source or #source < 100 then error("Empty response") end
-        loadstring(source)()
-        return getgenv().Rayfield or Rayfield
+        local fn, loadErr = loadstring(source)
+        if not fn then error("loadstring failed: " .. tostring(loadErr)) end
+        return fn()
     end)
-    local got = getgenv().Rayfield or (ok and err) or nil
-    if got and type(got) == "table" and got.CreateWindow then
-        Rayfield = got
+
+    local lib = result
+    if not (lib and type(lib) == "table" and lib.CreateWindow) then
+        lib = getgenv().Rayfield
+    end
+    if not (lib and type(lib) == "table" and lib.CreateWindow) then
+        lib = rawget(_G, "Rayfield")
+    end
+
+    if lib and type(lib) == "table" and lib.CreateWindow then
+        Rayfield = lib
         print("[Shaw Hub] Rayfield loaded from source " .. i)
         break
     else
-        warn("[Shaw Hub] Source " .. i .. " failed: " .. tostring(err))
+        warn("[Shaw Hub] Source " .. i .. " failed: " .. tostring(result))
     end
 end
 
 if not Rayfield then
-    warn("[Shaw Hub] All Rayfield sources failed.")
-    safeNotify("Shaw Hub — Load Failed", "Could not download UI library. Check your internet.", 10)
+    print("[Shaw Hub] Trying WindUI fallback...")
+    pcall(function()
+        local wind = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
+        if wind and type(wind) == "table" then Rayfield = wind end
+    end)
+end
+
+if not Rayfield then
+    warn("[Shaw Hub] All UI libraries failed — check executor console.")
+    safeNotify("Shaw Hub — Load Failed", "UI library blocked. Check executor console for details.", 10)
     return
 end
+
+print("[Shaw Hub] UI library ready. Building window...")
 
 --// ======================== STATE ========================
 local S = {
@@ -1094,7 +1114,7 @@ print("[Shaw Hub] Building UI...")
 local Window = Rayfield:CreateWindow({
     Name = "Shaw Brookhaven Hub",
     LoadingTitle = "Shaw Hub",
-    LoadingSubtitle = "v3.1",
+    LoadingSubtitle = "v3.2",
     ConfigurationSaving = { Enabled = true, FolderName = "ShawBHub", FileName = "Config" },
     KeySystem = false,
     ToggleUIKeybind = "K"
@@ -1383,7 +1403,7 @@ SetTab:CreateButton({ Name = "Unload Hub", Callback = function() if getgenv().Sh
 
 --// ======================== INFO TAB ========================
 InfoTab:CreateSection("About")
-InfoTab:CreateParagraph({ Title = "Shaw Brookhaven Hub v3.1", Content = "Polished Brookhaven hub with Infinite Yield features.\nMusic, Vehicles, Movement, Keybinds, Command Bar." })
+InfoTab:CreateParagraph({ Title = "Shaw Brookhaven Hub v3.2", Content = "Polished Brookhaven hub with Infinite Yield features.\nMusic, Vehicles, Movement, Keybinds, Command Bar." })
 InfoTab:CreateSection("Credits")
 InfoTab:CreateParagraph({ Title = "Made by", Content = "Shaw" })
 InfoTab:CreateParagraph({ Title = "Discord", Content = "Shaw6000" })
@@ -1442,5 +1462,5 @@ getgenv().ShawBHub = function()
 end
 
 --// ======================== READY ========================
-safeNotify("Shaw Brookhaven Hub v3.1", "Loaded! Press K to toggle UI.", 5)
-print("[Shaw Brookhaven Hub v3.1] Loaded successfully")
+safeNotify("Shaw Brookhaven Hub v3.2", "Loaded! Press K to toggle UI.", 5)
+print("[Shaw Brookhaven Hub v3.2] Loaded successfully")
