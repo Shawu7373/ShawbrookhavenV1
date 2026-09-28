@@ -1,33 +1,78 @@
---// ============================     Rayfield
+--// ====================================================================
+--// SHAW BROOKHAVEN HUB v3.3 (Fixed)
+--// Made by: Shaw | Discord: Shaw6000
+--// ====================================================================
 
-    print("[Shaw Hub] Trying Rayfield source " .. i .. "/" .. #rayfieldSources)
-    local ok, result = pcall(function()
+print("[Shaw Hub] Script execution started.")
+
+local ok, err = pcall(function()
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local StarterGui = game:GetService("StarterGui")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local SoundService = game:GetService("SoundService")
+
+local LP = Players.LocalPlayer
+local PG = LP:WaitForChild("PlayerGui", 15)
+if not PG then warn("[Shaw Hub] PlayerGui not found."); return end
+
+getgenv().ShawBHub = function() end
+for _, v in ipairs(PG:GetChildren()) do
+    if v.Name == "ShawBrookhavenHub" or v.Name == "ShawFlyPad" then
+        pcall(function() v:Destroy() end)
+    end
+end
+
+local function safeNotify(title, text, duration)
+    local ok2 = pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = title or "Shaw Hub", Text = text or "", Duration = duration or 3
+        })
+    end)
+    if not ok2 then
+        pcall(function()
+            StarterGui:SetCore("ChatMakeSystemMessage", { Text = "[Shaw Hub] " .. tostring(title) .. ": " .. tostring(text) })
+        end)
+    end
+end
+
+print("[Shaw Hub] Step 1: Loading Rayfield...")
+
+local Rayfield
+local rayfieldSources = {
+    "https://sirius.menu/rayfield",
+    "https://raw.githubusercontent.com/shlexware/Rayfield/main/source.lua",
+    "https://raw.githubusercontent.com/Footagesus/Rayfield/main/source.lua",
+    "https://raw.githubusercontent.com/luau-libraries/Rayfield/main/source.lua",
+    "https://rayfield.menu/api/load"
+}
+
+for i, url in ipairs(rayfieldSources) do
+    local ok2, result = pcall(function()
         local source = game:HttpGet(url)
         if not source or #source < 100 then error("Empty response") end
         local fn, loadErr = loadstring(source)
         if not fn then error("loadstring failed: " .. tostring(loadErr)) end
         return fn()
     end)
-
     local lib = result
-    if not (lib and type(lib) == "table" and lib.CreateWindow) then
-        lib = getgenv().Rayfield
-    end
-    if not (lib and type(lib) == "table" and lib.CreateWindow) then
-        lib = rawget(_G, "Rayfield")
-    end
-
+    if not (lib and type(lib) == "table" and lib.CreateWindow) then lib = getgenv().Rayfield end
+    if not (lib and type(lib) == "table" and lib.CreateWindow) then lib = rawget(_G, "Rayfield") end
     if lib and type(lib) == "table" and lib.CreateWindow then
         Rayfield = lib
-        print("[Shaw Hub] Rayfield loaded from source " .. i)
+        print("[Shaw Hub] Rayfield OK from source " .. i)
         break
-    else
-        warn("[Shaw Hub] Source " .. i .. " failed: " .. tostring(result))
     end
 end
 
 if not Rayfield then
-    print("[Shaw Hub] Trying WindUI fallback...")
     pcall(function()
         local wind = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
         if wind and type(wind) == "table" then Rayfield = wind end
@@ -35,14 +80,13 @@ if not Rayfield then
 end
 
 if not Rayfield then
-    warn("[Shaw Hub] All UI libraries failed — check executor console.")
-    safeNotify("Shaw Hub — Load Failed", "UI library blocked. Check executor console for details.", 10)
+    warn("[Shaw Hub] All UI libraries failed.")
+    safeNotify("Shaw Hub - Load Failed", "UI library blocked.", 10)
     return
 end
 
-print("[Shaw Hub] UI library ready. Building window...")
+print("[Shaw Hub] Step 2: State setup...")
 
---// ======================== STATE ========================
 local S = {
     Godmode = false, Noclip = false, Fly = false,
     FlySpeed = 60, FlyCurrentSpeed = 0,
@@ -60,14 +104,10 @@ local S = {
     Float = false, Anchor = false,
     VehicleFly = false, VehicleFlySpeed = 60,
     OriginalLighting = {
-        Ambient = Lighting.Ambient,
-        OutdoorAmbient = Lighting.OutdoorAmbient,
-        Brightness = Lighting.Brightness,
-        FogEnd = Lighting.FogEnd,
-        FogStart = Lighting.FogStart
+        Ambient = Lighting.Ambient, OutdoorAmbient = Lighting.OutdoorAmbient,
+        Brightness = Lighting.Brightness, FogEnd = Lighting.FogEnd, FogStart = Lighting.FogStart
     },
-    OriginalCollisions = {},
-    OriginalAnchored = {}
+    OriginalCollisions = {}, OriginalAnchored = {}
 }
 
 local Conn = {}
@@ -77,12 +117,10 @@ local FloatBV = nil
 local VehicleBV, VehicleBG = nil, nil
 local CachedVehicle = nil
 local RGBColor = Color3.fromRGB(255, 0, 0)
-local FlyPad = nil
 local MusicSound = nil
 local MusicRemote = nil
 local MusicRemoteChecked = false
 local SavedSongs = {}
-local flyUp, flyDown, flyLeft, flyRight, flyUpBtn, flyDownBtn = false, false, false, false, false, false
 local StareTarget = nil
 local CachedGPUnlockRemotes = nil
 
@@ -91,46 +129,28 @@ local function destroy(o) if o and o.Parent then pcall(function() o:Destroy() en
 local function getChar() return LP.Character end
 local function getHum() local c = getChar(); return c and c:FindFirstChildOfClass("Humanoid") end
 local function getRoot() local c = getChar(); return c and c:FindFirstChild("HumanoidRootPart") end
-local function isMobile() return UIS.TouchEnabled and not UIS.KeyboardEnabled end
 
---// ======================== VEHICLE HELPER ========================
 local function getCurrentVehicle()
-    local hum = getHum()
-    if not hum then return nil end
-    local seat = hum.SeatPart
-    if not seat then return nil end
+    local hum = getHum(); if not hum then return nil end
+    local seat = hum.SeatPart; if not seat then return nil end
     local vehicle = seat
-    while vehicle and not vehicle:IsA("Model") do
-        vehicle = vehicle.Parent
-    end
+    while vehicle and not vehicle:IsA("Model") do vehicle = vehicle.Parent end
     return vehicle
 end
 
---// ======================== MUSIC REMOTE FINDER ========================
 local function findBrookhavenMusicRemote()
     if MusicRemoteChecked then return MusicRemote end
     MusicRemoteChecked = true
     local candidates = {
-        "PlayMusic", "MusicEvent", "PlaySong", "SetMusic", "RadioEvent",
-        "MusicRemote", "BoomboxEvent", "PlayAudio", "SoundEvent",
-        "FireMusic", "SongEvent", "Music", "Radio", "Boombox"
+        "PlayMusic","MusicEvent","PlaySong","SetMusic","RadioEvent","MusicRemote",
+        "BoomboxEvent","PlayAudio","SoundEvent","FireMusic","SongEvent","Music","Radio","Boombox"
     }
-    for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
-        if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-            local n = obj.Name:lower()
-            if n:find("music") or n:find("song") or n:find("radio") or n:find("boombox") or n:find("audio") then
-                print("[Shaw Hub] Music candidate: " .. obj:GetFullName())
-            end
-        end
-    end
     for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
         if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
             local lower = obj.Name:lower()
             for _, name in ipairs(candidates) do
                 if lower == name:lower() or lower:find(name:lower()) then
-                    print("[Shaw Hub] Found music remote: " .. obj:GetFullName())
-                    MusicRemote = obj
-                    return obj
+                    MusicRemote = obj; return obj
                 end
             end
         end
@@ -138,7 +158,6 @@ local function findBrookhavenMusicRemote()
     return nil
 end
 
---// ======================== MUSIC PLAYER ========================
 local function stopMusic()
     if MusicSound then
         pcall(function() MusicSound:Stop() end)
@@ -150,23 +169,16 @@ end
 
 local function playMusicLocal(id, name)
     stopMusic()
-    local char = getChar()
-    if not char then safeNotify("Music", "Character not loaded.", 2); return end
+    local char = getChar(); if not char then safeNotify("Music", "Character not loaded.", 2); return end
     local sound = Instance.new("Sound")
-    sound.Name = "ShawMusic"
-    sound.SoundId = "rbxassetid://" .. tostring(id)
-    sound.Volume = S.MusicVolume
-    sound.Looped = false
-    sound.Parent = char
-    local success, err = pcall(function() sound:Play() end)
-    if success then
-        MusicSound = sound
-        S.CurrentSongId = id
-        S.MusicPlaying = true
+    sound.Name = "ShawMusic"; sound.SoundId = "rbxassetid://" .. tostring(id)
+    sound.Volume = S.MusicVolume; sound.Looped = false; sound.Parent = char
+    local ok2, err2 = pcall(function() sound:Play() end)
+    if ok2 then
+        MusicSound = sound; S.CurrentSongId = id; S.MusicPlaying = true
         safeNotify("Music", "Playing locally: " .. (name or id), 2)
     else
-        safeNotify("Music", "Failed: " .. tostring(err), 3)
-        sound:Destroy()
+        safeNotify("Music", "Failed: " .. tostring(err2), 3); sound:Destroy()
     end
 end
 
@@ -177,24 +189,19 @@ local function playMusicGlobal(id, name)
     stopMusic()
     local remote = findBrookhavenMusicRemote()
     if remote then
-        local success = pcall(function()
+        local ok2 = pcall(function()
             if remote:IsA("RemoteEvent") then remote:FireServer(numericId)
             else remote:InvokeServer(numericId) end
         end)
-        if success then
+        if ok2 then
             local char = getChar()
             if char then
                 local sound = Instance.new("Sound")
-                sound.Name = "ShawMusic"
-                sound.SoundId = "rbxassetid://" .. tostring(numericId)
-                sound.Volume = S.MusicVolume
-                sound.Looped = false
-                sound.Parent = char
-                pcall(function() sound:Play() end)
-                MusicSound = sound
+                sound.Name = "ShawMusic"; sound.SoundId = "rbxassetid://" .. tostring(numericId)
+                sound.Volume = S.MusicVolume * 0.5; sound.Looped = false; sound.Parent = char
+                pcall(function() sound:Play() end); MusicSound = sound
             end
-            S.CurrentSongId = numericId
-            S.MusicPlaying = true
+            S.CurrentSongId = numericId; S.MusicPlaying = true
             safeNotify("Music", "Playing globally: " .. (name or numericId), 3)
         else
             safeNotify("Music", "Remote failed. Playing locally.", 3)
@@ -211,7 +218,6 @@ local function setMusicVolume(v)
     if MusicSound then pcall(function() MusicSound.Volume = S.MusicVolume end) end
 end
 
---// ======================== MUSIC SAVE SYSTEM ========================
 local SAVE_FOLDER = "ShawBHub"
 local SAVE_FILE = SAVE_FOLDER .. "/songs.json"
 
@@ -224,14 +230,13 @@ end
 local function loadSongs()
     ensureFolder()
     if type(isfile) == "function" and type(readfile) == "function" then
-        local ok, exists = pcall(isfile, SAVE_FILE)
-        if ok and exists then
-            local ok2, content = pcall(readfile, SAVE_FILE)
-            if ok2 then
-                local ok3, decoded = pcall(function() return HttpService:JSONDecode(content) end)
-                if ok3 and type(decoded) == "table" then
+        local ok2, exists = pcall(isfile, SAVE_FILE)
+        if ok2 and exists then
+            local ok3, content = pcall(readfile, SAVE_FILE)
+            if ok3 then
+                local ok4, decoded = pcall(function() return HttpService:JSONDecode(content) end)
+                if ok4 and type(decoded) == "table" then
                     SavedSongs = decoded
-                    print("[Shaw Hub] Loaded " .. #SavedSongs .. " saved songs")
                     return
                 end
             end
@@ -242,32 +247,26 @@ end
 
 local function saveSongs()
     ensureFolder()
-    if type(writefile) ~= "function" then
-        warn("[Shaw Hub] writefile unavailable — songs not saved.")
-        return
-    end
-    local ok, encoded = pcall(function() return HttpService:JSONEncode(SavedSongs) end)
-    if not ok then warn("[Shaw Hub] JSONEncode failed."); return end
-    local ok2, err = pcall(writefile, SAVE_FILE, encoded)
-    if not ok2 then warn("[Shaw Hub] writefile failed: " .. tostring(err)) end
+    if type(writefile) ~= "function" then return end
+    local ok2, encoded = pcall(function() return HttpService:JSONEncode(SavedSongs) end)
+    if not ok2 then return end
+    pcall(writefile, SAVE_FILE, encoded)
 end
 
 local function addSong(id, name)
     if not id or id == "" then return false end
     for _, s in ipairs(SavedSongs) do
-        if s.id == id then safeNotify("Music", "Song ID already saved.", 2); return false end
+        if s.id == id then safeNotify("Music", "Song already saved.", 2); return false end
     end
     table.insert(SavedSongs, {id = id, name = name or ("Song " .. id)})
-    saveSongs()
-    safeNotify("Music", "Saved: " .. (name or id), 2)
+    saveSongs(); safeNotify("Music", "Saved: " .. (name or id), 2)
     return true
 end
 
 local function removeSong(id)
     for i, s in ipairs(SavedSongs) do
         if s.id == id then
-            table.remove(SavedSongs, i)
-            saveSongs()
+            table.remove(SavedSongs, i); saveSongs()
             safeNotify("Music", "Removed: " .. (s.name or id), 2)
             return true
         end
@@ -275,98 +274,18 @@ local function removeSong(id)
     return false
 end
 
---// ======================== MOBILE FLY PAD ========================
-local function createFlyPad()
-    if FlyPad then return end
-    local gui = Instance.new("ScreenGui")
-    gui.Name = "ShawFlyPad"
-    gui.ResetOnSpawn = false
-    gui.IgnoreGuiInset = true
-    gui.DisplayOrder = 999998
-    gui.Parent = PG
-    FlyPad = gui
-
-    local container = Instance.new("Frame")
-    container.Name = "Pad"
-    container.Size = UDim2.fromOffset(160, 160)
-    container.Position = UDim2.new(0, 20, 0.5, -80)
-    container.BackgroundTransparency = 1
-    container.Visible = false
-    container.Parent = gui
-
-    local function mkBtn(txt, pos, size, bg)
-        local b = Instance.new("TextButton")
-        b.Size = size or UDim2.fromOffset(48, 48)
-        b.Position = pos
-        b.BackgroundColor3 = bg or Color3.fromRGB(30, 30, 45)
-        b.BackgroundTransparency = 0.2
-        b.BorderSizePixel = 0
-        b.Text = txt
-        b.TextColor3 = Color3.fromRGB(235, 235, 245)
-        b.TextSize = 20
-        b.Font = Enum.Font.GothamBold
-        b.AutoButtonColor = false
-        b.Active = true
-        b.Parent = container
-        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 10)
-        local stroke = Instance.new("UIStroke", b)
-        stroke.Color = Color3.fromRGB(123, 104, 238)
-        stroke.Thickness = 1.5
-        return b
-    end
-
-    local upBtn = mkBtn("▲", UDim2.new(0.5, -24, 0, 0))
-    local downBtn = mkBtn("▼", UDim2.new(0.5, -24, 1, -48))
-    local leftBtn = mkBtn("◀", UDim2.new(0, 0, 0.5, -24))
-    local rightBtn = mkBtn("▶", UDim2.new(1, -48, 0.5, -24))
-    local upMoveBtn = mkBtn("↑", UDim2.new(1, 10, 0, 0), nil, Color3.fromRGB(80, 210, 120))
-    local downMoveBtn = mkBtn("↓", UDim2.new(1, 10, 0, 58), nil, Color3.fromRGB(220, 80, 90))
-
-    local function bindHold(btn, setter)
-        btn.InputBegan:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-                setter(true)
-            end
-        end)
-        btn.InputEnded:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
-                setter(false)
-            end
-        end)
-    end
-
-    bindHold(upBtn, function(v) flyUp = v end)
-    bindHold(downBtn, function(v) flyDown = v end)
-    bindHold(leftBtn, function(v) flyLeft = v end)
-    bindHold(rightBtn, function(v) flyRight = v end)
-    bindHold(upMoveBtn, function(v) flyUpBtn = v end)
-    bindHold(downMoveBtn, function(v) flyDownBtn = v end)
-end
-
-local function setFlyPadVisible(visible)
-    if not FlyPad then return end
-    local pad = FlyPad:FindFirstChild("Pad")
-    if pad then pad.Visible = visible end
-end
-
---// ======================== FLY SYSTEM ========================
 local function startFly()
     local char, hum, root = getChar(), getHum(), getRoot()
     if not char or not hum or not root then return end
-    if FlyBV then return end
+    if FlyBV and FlyBV.Parent then return end
     pcall(function() hum.PlatformStand = true end)
     FlyBV = Instance.new("BodyVelocity")
     FlyBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    FlyBV.Velocity = Vector3.zero
-    FlyBV.P = 1250
-    FlyBV.Parent = root
+    FlyBV.Velocity = Vector3.zero; FlyBV.P = 1250; FlyBV.Parent = root
     FlyBG = Instance.new("BodyGyro")
     FlyBG.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-    FlyBG.P = 9e4
-    FlyBG.D = 500
-    FlyBG.Parent = root
+    FlyBG.P = 9e4; FlyBG.D = 500; FlyBG.Parent = root
     S.FlyCurrentSpeed = 0
-    if isMobile() then createFlyPad(); setFlyPadVisible(true) end
 end
 
 local function stopFly()
@@ -381,30 +300,17 @@ local function stopFly()
         end)
     end
     S.FlyCurrentSpeed = 0
-    setFlyPadVisible(false)
 end
 
 local function updateFly(dt)
     if not S.Fly then return end
     local hum, root = getHum(), getRoot()
-    if not hum or not root or not FlyBV or not FlyBG then return end
-    local cam = Workspace.CurrentCamera
-    if not cam then return end
+    if not hum or not root or not FlyBV or not FlyBV.Parent or not FlyBG or not FlyBG.Parent then return end
+    local cam = Workspace.CurrentCamera; if not cam then return end
 
-    local moveDir = Vector3.zero
-    local camLook = cam.CFrame.LookVector
-    local camRight = cam.CFrame.RightVector
-
-    if UIS:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + camLook end
-    if UIS:IsKeyDown(Enum.KeyCode.S) then moveDir = moveDir - camLook end
-    if UIS:IsKeyDown(Enum.KeyCode.A) then moveDir = moveDir - camRight end
-    if UIS:IsKeyDown(Enum.KeyCode.D) then moveDir = moveDir + camRight end
-    if flyUp then moveDir = moveDir + camLook end
-    if flyDown then moveDir = moveDir - camLook end
-    if flyLeft then moveDir = moveDir - camRight end
-    if flyRight then moveDir = moveDir + camRight end
-    if UIS:IsKeyDown(Enum.KeyCode.Space) or flyUpBtn then moveDir = moveDir + Vector3.new(0, 1, 0) end
-    if UIS:IsKeyDown(Enum.KeyCode.LeftShift) or flyDownBtn then moveDir = moveDir - Vector3.new(0, 1, 0) end
+    local moveDir = hum.MoveDirection
+    if UIS:IsKeyDown(Enum.KeyCode.Space) then moveDir = moveDir + Vector3.new(0, 1, 0) end
+    if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir = moveDir - Vector3.new(0, 1, 0) end
 
     if moveDir.Magnitude > 0.01 then moveDir = moveDir.Unit end
     local targetSpeed = (moveDir.Magnitude > 0.01) and S.FlySpeed or 0
@@ -418,11 +324,9 @@ local function updateFly(dt)
     FlyBG.CFrame = cam.CFrame
 end
 
---// ======================== TP WALK ========================
 local function updateTpWalk(dt)
     if not S.TpWalk then return end
-    local hum, root = getHum(), getRoot()
-    if not hum or not root then return end
+    local hum, root = getHum(), getRoot(); if not hum or not root then return end
     local md = hum.MoveDirection
     if md.Magnitude > 0.01 then
         local newPos = root.Position + md * S.TpWalkSpeed * dt
@@ -431,31 +335,22 @@ local function updateTpWalk(dt)
         rp.FilterDescendantsInstances = {char}
         rp.FilterType = Enum.RaycastFilterType.Exclude
         local hit = Workspace:Raycast(newPos + Vector3.new(0, 5, 0), Vector3.new(0, -20, 0), rp)
-        if hit then
-            newPos = Vector3.new(newPos.X, hit.Position.Y + root.Size.Y / 2 + 0.1, newPos.Z)
-        end
-        root.CFrame = CFrame.new(newPos, newPos + root.CFrame.LookVector)
+        if hit then newPos = Vector3.new(newPos.X, hit.Position.Y + root.Size.Y / 2 + 0.1, newPos.Z) end
+        root.CFrame = CFrame.new(newPos, newPos + md.Unit)
     end
 end
 
---// ======================== WALL WALK ========================
 local lastWallScan = 0
 local function updateWallWalk(dt)
     if not S.WallWalk then return end
     if tick() - lastWallScan < 0.1 then return end
     lastWallScan = tick()
-    local char, root = getChar(), getRoot()
-    if not char or not root then return end
+    local char, root = getChar(), getRoot(); if not char or not root then return end
     if not UIS:IsKeyDown(Enum.KeyCode.Space) then return end
     local params = RaycastParams.new()
     params.FilterDescendantsInstances = {char}
     params.FilterType = Enum.RaycastFilterType.Exclude
-    local dirs = {
-        root.CFrame.LookVector,
-        -root.CFrame.LookVector,
-        root.CFrame.RightVector,
-        -root.CFrame.RightVector
-    }
+    local dirs = {root.CFrame.LookVector, -root.CFrame.LookVector, root.CFrame.RightVector, -root.CFrame.RightVector}
     for _, dir in ipairs(dirs) do
         local result = Workspace:Raycast(root.Position, dir * 3, params)
         if result then
@@ -466,105 +361,75 @@ local function updateWallWalk(dt)
     end
 end
 
---// ======================== FLOAT ========================
 local function updateFloat()
     if not S.Float then
         if FloatBV then destroy(FloatBV); FloatBV = nil end
         return
     end
-    local root = getRoot()
-    if not root then return end
-    if not FloatBV then
+    local root = getRoot(); if not root then return end
+    if not FloatBV or not FloatBV.Parent then
+        if FloatBV then FloatBV = nil end
         FloatBV = Instance.new("BodyVelocity")
         FloatBV.MaxForce = Vector3.new(0, math.huge, 0)
-        FloatBV.P = 1250
-        FloatBV.Parent = root
+        FloatBV.P = 1250; FloatBV.Parent = root
     end
     FloatBV.Velocity = Vector3.zero
 end
 
---// ======================== ANCHOR ========================
 local function setAnchor(state)
-    local char = getChar()
-    if not char then return end
+    local char = getChar(); if not char then return end
     if state then
         for _, p in ipairs(char:GetDescendants()) do
-            if p:IsA("BasePart") then
-                S.OriginalAnchored[p] = p.Anchored
-                p.Anchored = true
-            end
+            if p:IsA("BasePart") then S.OriginalAnchored[p] = p.Anchored; p.Anchored = true end
         end
     else
         for _, p in ipairs(char:GetDescendants()) do
-            if p:IsA("BasePart") then
-                p.Anchored = S.OriginalAnchored[p] or false
-            end
+            if p:IsA("BasePart") then p.Anchored = S.OriginalAnchored[p] or false end
         end
         S.OriginalAnchored = {}
     end
 end
 
---// ======================== VEHICLE FLY ========================
 local function stopVehicleFly()
     if VehicleBV then destroy(VehicleBV); VehicleBV = nil end
     if VehicleBG then destroy(VehicleBG); VehicleBG = nil end
 end
 
 local function updateVehicleFly()
-    if not S.VehicleFly then
-        stopVehicleFly()
-        CachedVehicle = nil
-        return
-    end
-    if not CachedVehicle or not CachedVehicle.Parent then
-        CachedVehicle = getCurrentVehicle()
-    end
+    if not S.VehicleFly then stopVehicleFly(); CachedVehicle = nil; return end
+    if not CachedVehicle or not CachedVehicle.Parent then CachedVehicle = getCurrentVehicle() end
     local vehicle = CachedVehicle
     if not vehicle then stopVehicleFly(); return end
     local primary = vehicle.PrimaryPart or vehicle:FindFirstChildWhichIsA("BasePart")
     if not primary then return end
 
-    if not VehicleBV or VehicleBV.Parent ~= primary then
+    if not VehicleBV or not VehicleBV.Parent or VehicleBV.Parent ~= primary then
         stopVehicleFly()
         VehicleBV = Instance.new("BodyVelocity")
         VehicleBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-        VehicleBV.P = 1250
-        VehicleBV.Parent = primary
+        VehicleBV.P = 1250; VehicleBV.Parent = primary
         VehicleBG = Instance.new("BodyGyro")
         VehicleBG.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-        VehicleBG.P = 9e4
-        VehicleBG.D = 500
-        VehicleBG.Parent = primary
+        VehicleBG.P = 9e4; VehicleBG.D = 500; VehicleBG.Parent = primary
     end
 
+    local hum = getHum()
     local cam = Workspace.CurrentCamera
-    if not cam then return end
+    if not hum or not cam then return end
 
-    local moveDir = Vector3.zero
-    local camLook = cam.CFrame.LookVector
-    local camRight = cam.CFrame.RightVector
-
-    if UIS:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + camLook end
-    if UIS:IsKeyDown(Enum.KeyCode.S) then moveDir = moveDir - camLook end
-    if UIS:IsKeyDown(Enum.KeyCode.A) then moveDir = moveDir - camRight end
-    if UIS:IsKeyDown(Enum.KeyCode.D) then moveDir = moveDir + camRight end
+    local moveDir = hum.MoveDirection
     if UIS:IsKeyDown(Enum.KeyCode.Space) then moveDir = moveDir + Vector3.new(0, 1, 0) end
     if UIS:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir = moveDir - Vector3.new(0, 1, 0) end
-
     if moveDir.Magnitude > 0.01 then moveDir = moveDir.Unit end
     VehicleBV.Velocity = moveDir * S.VehicleFlySpeed
     VehicleBG.CFrame = cam.CFrame
 end
 
---// ======================== OTHER FEATURES ========================
 local function applyGodmode()
     if not S.Godmode then return end
-    local char, hum = getChar(), getHum()
-    if not char or not hum then return end
+    local char, hum = getChar(), getHum(); if not char or not hum then return end
     if not char:FindFirstChildOfClass("ForceField") then
-        local ff = Instance.new("ForceField")
-        ff.Visible = false
-        ff.Parent = char
+        local ff = Instance.new("ForceField"); ff.Visible = false; ff.Parent = char
     end
     if hum.Health < hum.MaxHealth then pcall(function() hum.Health = hum.MaxHealth end) end
     for _, o in ipairs(char:GetDescendants()) do
@@ -591,37 +456,25 @@ local function createESP(target, color, labelText)
     if not target or ESPObjects[target] then return end
     local root = target:FindFirstChild("HumanoidRootPart"); if not root then return end
     local highlight = Instance.new("Highlight")
-    highlight.Name = "ShawESP"
-    highlight.Adornee = target
-    highlight.FillColor = color
-    highlight.FillTransparency = 0.5
-    highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
-    highlight.OutlineTransparency = 0
+    highlight.Name = "ShawESP"; highlight.Adornee = target
+    highlight.FillColor = color; highlight.FillTransparency = 0.5
+    highlight.OutlineColor = Color3.fromRGB(255,255,255); highlight.OutlineTransparency = 0
     highlight.Parent = target
     local billboard = Instance.new("BillboardGui")
-    billboard.Name = "ShawESPLabel"
-    billboard.Adornee = root
-    billboard.Size = UDim2.new(0, 200, 0, 50)
-    billboard.StudsOffset = Vector3.new(0, 3, 0)
-    billboard.AlwaysOnTop = true
-    billboard.Parent = target
+    billboard.Name = "ShawESPLabel"; billboard.Adornee = root
+    billboard.Size = UDim2.new(0, 200, 0, 50); billboard.StudsOffset = Vector3.new(0, 3, 0)
+    billboard.AlwaysOnTop = true; billboard.Parent = target
     local lbl = Instance.new("TextLabel")
-    lbl.Name = "Label"
-    lbl.Size = UDim2.new(1, 0, 1, 0)
-    lbl.BackgroundTransparency = 1
-    lbl.TextColor3 = color
-    lbl.TextStrokeTransparency = 0
-    lbl.TextScaled = true
-    lbl.Font = Enum.Font.GothamBold
-    lbl.Text = labelText or target.Name
+    lbl.Name = "Label"; lbl.Size = UDim2.new(1, 0, 1, 0); lbl.BackgroundTransparency = 1
+    lbl.TextColor3 = color; lbl.TextStrokeTransparency = 0; lbl.TextScaled = true
+    lbl.Font = Enum.Font.GothamBold; lbl.Text = labelText or target.Name
     lbl.Parent = billboard
     ESPObjects[target] = {highlight = highlight, billboard = billboard, label = lbl}
 end
 
 local function removeESP(target)
     if ESPObjects[target] then
-        destroy(ESPObjects[target].highlight)
-        destroy(ESPObjects[target].billboard)
+        destroy(ESPObjects[target].highlight); destroy(ESPObjects[target].billboard)
         ESPObjects[target] = nil
     end
 end
@@ -652,11 +505,9 @@ end
 
 local function applyFullbright()
     if S.Fullbright then
-        Lighting.Ambient = Color3.fromRGB(255, 255, 255)
-        Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
-        Lighting.Brightness = 3
-        Lighting.FogEnd = 100000
-        Lighting.FogStart = 0
+        Lighting.Ambient = Color3.fromRGB(255,255,255)
+        Lighting.OutdoorAmbient = Color3.fromRGB(255,255,255)
+        Lighting.Brightness = 3; Lighting.FogEnd = 100000; Lighting.FogStart = 0
     else
         Lighting.Ambient = S.OriginalLighting.Ambient
         Lighting.OutdoorAmbient = S.OriginalLighting.OutdoorAmbient
@@ -666,7 +517,6 @@ local function applyFullbright()
     end
 end
 
---// ======================== ACTION FUNCTIONS ========================
 local function teleportToPlayer(targetPlayer)
     if not targetPlayer or not targetPlayer.Character then safeNotify("Teleport", "Player not found.", 2); return end
     local root = getRoot()
@@ -685,11 +535,20 @@ local function copyAvatar(targetPlayer)
     end
     for _, obj in ipairs(targetPlayer.Character:GetChildren()) do
         if obj:IsA("Accessory") or obj:IsA("Shirt") or obj:IsA("Pants") or obj:IsA("ShirtGraphic") then
-            local clone = obj:Clone()
-            clone.Parent = myChar
+            local clone = obj:Clone(); clone.Parent = myChar
         end
     end
     safeNotify("Copy Avatar", "Copied " .. targetPlayer.Name .. "'s avatar.", 2)
+end
+
+local function bringPlayer(targetPlayer)
+    if not targetPlayer or not targetPlayer.Character then safeNotify("Bring", "Player not found.", 2); return end
+    local root = getRoot()
+    local tr = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if root and tr then
+        pcall(function() tr.CFrame = root.CFrame + Vector3.new(0, 3, 3) end)
+        safeNotify("Bring", "Brought " .. targetPlayer.Name, 2)
+    end
 end
 
 local function bringAllPlayers()
@@ -698,10 +557,7 @@ local function bringAllPlayers()
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LP and p.Character then
             local tr = p.Character:FindFirstChild("HumanoidRootPart")
-            if tr then
-                pcall(function() tr.CFrame = root.CFrame + Vector3.new(0, 3, 3) end)
-                n = n + 1
-            end
+            if tr then pcall(function() tr.CFrame = root.CFrame + Vector3.new(0, 3, 3) end); n = n + 1 end
         end
     end
     safeNotify("Bring All", "Brought " .. n .. " players.", 2)
@@ -714,7 +570,7 @@ local function flingAll()
             local tr = p.Character:FindFirstChild("HumanoidRootPart")
             if tr then
                 pcall(function()
-                    tr.AssemblyLinearVelocity = Vector3.new(math.random(-2000, 2000), 2000, math.random(-2000, 2000))
+                    tr.AssemblyLinearVelocity = Vector3.new(math.random(-2000,2000), 2000, math.random(-2000,2000))
                 end)
                 n = n + 1
             end
@@ -728,10 +584,7 @@ local function freezeAll()
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LP and p.Character then
             local h = p.Character:FindFirstChildOfClass("Humanoid")
-            if h then
-                pcall(function() h.WalkSpeed = 0; h.JumpPower = 0 end)
-                n = n + 1
-            end
+            if h then pcall(function() h.WalkSpeed = 0; h.JumpPower = 0 end); n = n + 1 end
         end
     end
     safeNotify("Freeze All", "Froze " .. n .. " players.", 2)
@@ -757,8 +610,7 @@ local function tryUnlockGamepasses()
             if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
                 for _, name in ipairs(remoteNames) do
                     if obj.Name:lower():find(name:lower()) then
-                        table.insert(CachedGPUnlockRemotes, obj)
-                        break
+                        table.insert(CachedGPUnlockRemotes, obj); break
                     end
                 end
             end
@@ -771,37 +623,29 @@ local function tryUnlockGamepasses()
             unlocked = unlocked + 1
         end)
     end
-    if unlocked > 0 then safeNotify("Gamepass Unlock", "Fired " .. unlocked .. " remote(s). May not work.", 3)
+    if unlocked > 0 then safeNotify("Gamepass Unlock", "Fired " .. unlocked .. " remote(s).", 3)
     else safeNotify("Gamepass Unlock", "No unlock remotes found.", 3) end
 end
 
 local function healSelf()
     local hum = getHum()
-    if hum then
-        pcall(function() hum.Health = hum.MaxHealth end)
-        safeNotify("Heal", "Health restored.", 2)
-    end
+    if hum then pcall(function() hum.Health = hum.MaxHealth end); safeNotify("Heal", "Health restored.", 2) end
 end
 
 local function feedSelf()
     local char = getChar()
     if char then
-        for _, obj in ipairs(char:GetDescendants()) do
-            if (obj:IsA("NumberValue") or obj:IsA("IntValue")) then
-                local n = obj.Name:lower()
-                if n:find("hunger") or n:find("thirst") or n:find("food") or n:find("water") then
-                    pcall(function() obj.Value = 100 end)
+        local function fillStats(parent)
+            for _, obj in ipairs(parent:GetDescendants()) do
+                if (obj:IsA("NumberValue") or obj:IsA("IntValue")) then
+                    local n = obj.Name:lower()
+                    if n:find("hunger") or n:find("thirst") or n:find("food") or n:find("water") then
+                        pcall(function() obj.Value = 100 end)
+                    end
                 end
             end
         end
-        for _, obj in ipairs(LP:GetDescendants()) do
-            if (obj:IsA("NumberValue") or obj:IsA("IntValue")) then
-                local n = obj.Name:lower()
-                if n:find("hunger") or n:find("thirst") or n:find("food") or n:find("water") then
-                    pcall(function() obj.Value = 100 end)
-                end
-            end
-        end
+        fillStats(char); fillStats(LP)
         safeNotify("Feed", "Hunger and thirst restored.", 2)
     end
 end
@@ -811,8 +655,7 @@ local function stareAt(targetPlayer)
     local hum = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
     local cam = Workspace.CurrentCamera
     if hum and cam then
-        cam.CameraSubject = hum
-        StareTarget = targetPlayer
+        cam.CameraSubject = hum; StareTarget = targetPlayer
         safeNotify("Stare", "Now staring at " .. targetPlayer.Name, 2)
     end
 end
@@ -834,9 +677,7 @@ local function dropVehicle()
     if not vehicle then safeNotify("Vehicle", "You are not in a vehicle.", 2); return end
     local primary = vehicle.PrimaryPart or vehicle:FindFirstChildWhichIsA("BasePart")
     local root = getRoot()
-    if primary and root then
-        pcall(function() primary.CFrame = root.CFrame + Vector3.new(0, 5, 5) end)
-    end
+    if primary and root then pcall(function() primary.CFrame = root.CFrame + Vector3.new(0, 5, 5) end) end
 end
 
 local function ejectSelf()
@@ -847,14 +688,41 @@ local function ejectSelf()
     end
 end
 
---// ======================== COMMAND PARSER ========================
+local function findPlayerByPrefix(prefix)
+    if not prefix or prefix == "" then return nil end
+    local p = prefix:lower()
+    if p == "r" or p == "random" then
+        local others = {}
+        for _, pl in ipairs(Players:GetPlayers()) do
+            if pl ~= LP then table.insert(others, pl) end
+        end
+        if #others == 0 then return nil end
+        return others[math.random(1, #others)]
+    end
+    local prefixMatch = nil
+    for _, pl in ipairs(Players:GetPlayers()) do
+        if pl ~= LP then
+            local nameLower = pl.Name:lower()
+            local dispLower = pl.DisplayName:lower()
+            if nameLower == p or dispLower == p then return pl end
+            if not prefixMatch then
+                if nameLower:sub(1, #p) == p or dispLower:sub(1, #p) == p then
+                    prefixMatch = pl
+                end
+            end
+        end
+    end
+    return prefixMatch
+end
+
 local function executeCommand(text)
+    if not text then return end
     text = text:gsub("^;", ""):gsub("^/", ""):gsub("^%s+", ""):gsub("%s+$", "")
     local args = {}
     for word in text:gmatch("%S+") do table.insert(args, word) end
     if #args == 0 then return end
     local cmd = args[1]:lower()
-    local a1 = args[2]
+    local a1 = args[2]; local a2 = args[3]
 
     if cmd == "fly" then S.Fly = true; startFly(); safeNotify("Cmd", "Fly ON", 2)
     elseif cmd == "unfly" then S.Fly = false; stopFly(); safeNotify("Cmd", "Fly OFF", 2)
@@ -873,26 +741,74 @@ local function executeCommand(text)
     elseif cmd == "wallwalk" then S.WallWalk = not S.WallWalk; safeNotify("Cmd", "WallWalk: " .. tostring(S.WallWalk), 2)
     elseif cmd == "float" then S.Float = not S.Float; safeNotify("Cmd", "Float: " .. tostring(S.Float), 2)
     elseif cmd == "anchor" then S.Anchor = not S.Anchor; setAnchor(S.Anchor); safeNotify("Cmd", "Anchor: " .. tostring(S.Anchor), 2)
-    elseif cmd == "goto" then if a1 then local target = Players:FindFirstChild(a1); if target then teleportToPlayer(target) else safeNotify("Cmd", "Player not found.", 2) end end
+    elseif cmd == "goto" or cmd == "tp" then
+        local targetStr = a1
+        if targetStr and targetStr:lower() == "to" then targetStr = a2 end
+        if targetStr then
+            local target = findPlayerByPrefix(targetStr)
+            if target then teleportToPlayer(target)
+            else safeNotify("Cmd", "No player matching: " .. targetStr, 2) end
+        else safeNotify("Cmd", "Usage: ;tp to r | ;tp to ca", 2) end
     elseif cmd == "bring" then
-        if a1 then
-            local target = Players:FindFirstChild(a1)
-            if target and target.Character then
-                local root = getRoot()
-                local tr = target.Character:FindFirstChild("HumanoidRootPart")
-                if root and tr then
-                    pcall(function() tr.CFrame = root.CFrame + Vector3.new(0, 3, 3) end)
-                    safeNotify("Cmd", "Brought " .. target.Name, 2)
-                end
-            end
+        local targetStr = a1
+        if targetStr and targetStr:lower() == "to" then targetStr = a2 end
+        if targetStr then
+            local target = findPlayerByPrefix(targetStr)
+            if target then bringPlayer(target)
+            else safeNotify("Cmd", "No player matching: " .. targetStr, 2) end
         end
-    elseif cmd == "stare" then if a1 then local target = Players:FindFirstChild(a1); if target then stareAt(target) end end
+    elseif cmd == "stare" then
+        local targetStr = a1
+        if targetStr and targetStr:lower() == "to" then targetStr = a2 end
+        if targetStr then
+            local target = findPlayerByPrefix(targetStr)
+            if target then stareAt(target) end
+        end
     elseif cmd == "rejoin" then pcall(function() TeleportService:Teleport(game.PlaceId, LP) end)
-    elseif cmd == "help" then safeNotify("Commands", "fly, unfly, speed N, jump N, gravity N, noclip, clip, god, ungod, heal, feed, invisible, visible, tpwalk, wallwalk, float, anchor, goto NAME, bring NAME, stare NAME, rejoin", 8)
+    elseif cmd == "help" then
+        safeNotify("Commands", "fly, unfly, speed N, jump N, gravity N, noclip, clip, god, ungod, heal, feed, invisible, visible, tpwalk, wallwalk, float, anchor | tp to X | bring to X | stare to X | rejoin", 8)
     else safeNotify("Cmd", "Unknown command: " .. cmd, 2) end
 end
 
---// ======================== MAIN HEARTBEAT ========================
+track(LP.Chatted:Connect(function(message)
+    if not message or message == "" then return end
+    local lower = message:lower():gsub("^%s+", ""):gsub("%s+$", "")
+    if lower:sub(1, 1) ~= ";" and lower:sub(1, 1) ~= "/" then return end
+
+    local tpTarget = lower:match("^[;/]tp%s+to%s+(.+)$")
+    if not tpTarget then tpTarget = lower:match("^[;/]tp%s+(.+)$") end
+    if not tpTarget then tpTarget = lower:match("^[;/]goto%s+to%s+(.+)$") end
+    if not tpTarget then tpTarget = lower:match("^[;/]goto%s+(.+)$") end
+    if tpTarget then
+        tpTarget = tpTarget:gsub("%s+$", "")
+        local target = findPlayerByPrefix(tpTarget)
+        if target then teleportToPlayer(target); safeNotify("Chat", "Teleported to " .. target.Name, 2)
+        else safeNotify("Chat", "No player matching: " .. tpTarget, 2) end
+        return
+    end
+
+    local bringTarget = lower:match("^[;/]bring%s+to%s+(.+)$")
+    if not bringTarget then bringTarget = lower:match("^[;/]bring%s+(.+)$") end
+    if bringTarget then
+        bringTarget = bringTarget:gsub("%s+$", "")
+        local target = findPlayerByPrefix(bringTarget)
+        if target then bringPlayer(target); safeNotify("Chat", "Brought " .. target.Name, 2)
+        else safeNotify("Chat", "No player matching: " .. bringTarget, 2) end
+        return
+    end
+
+    local stareTarget = lower:match("^[;/]stare%s+to%s+(.+)$")
+    if not stareTarget then stareTarget = lower:match("^[;/]stare%s+(.+)$") end
+    if stareTarget then
+        stareTarget = stareTarget:gsub("%s+$", "")
+        local target = findPlayerByPrefix(stareTarget)
+        if target then stareAt(target) end
+        return
+    end
+
+    pcall(executeCommand, message)
+end))
+
 local mainHB = RunService.Heartbeat:Connect(function(dt)
     if S.Fly then updateFly(dt) end
     if S.TpWalk then updateTpWalk(dt) end
@@ -906,9 +822,7 @@ local mainHB = RunService.Heartbeat:Connect(function(dt)
     if hum then
         if S.SpeedEnabled then hum.WalkSpeed = S.Speed
         elseif hum.WalkSpeed ~= 16 then hum.WalkSpeed = 16 end
-        if S.JumpEnabled then
-            hum.UseJumpPower = true
-            hum.JumpPower = S.JumpPower
+        if S.JumpEnabled then hum.UseJumpPower = true; hum.JumpPower = S.JumpPower
         elseif hum.UseJumpPower and hum.JumpPower ~= 50 then hum.JumpPower = 50 end
     end
 
@@ -929,7 +843,8 @@ local mainHB = RunService.Heartbeat:Connect(function(dt)
         local root = getRoot()
         if root then
             for _, c in ipairs(root:GetChildren()) do
-                if c:IsA("BodyVelocity") or c:IsA("BodyAngularVelocity") or c:IsA("BodyThrust") then
+                if (c:IsA("BodyVelocity") or c:IsA("BodyAngularVelocity") or c:IsA("BodyThrust"))
+                   and c ~= FlyBV and c ~= FloatBV and c ~= VehicleBV then
                     pcall(function() c:Destroy() end)
                 end
             end
@@ -970,12 +885,26 @@ track(LP.CharacterAdded:Connect(function(char)
     local root = char:WaitForChild("HumanoidRootPart", 5)
     local hum = char:WaitForChild("Humanoid", 5)
     if not root or not hum then return end
+    FlyBV = nil; FlyBG = nil; FloatBV = nil
+    if StareTarget then
+        StareTarget = nil
+        local cam = Workspace.CurrentCamera
+        if cam then cam.CameraSubject = hum end
+    end
     if S.Noclip then S.OriginalCollisions = {}; setNoclip(true) end
     if S.Fly then task.wait(0.2); startFly() end
     if S.Anchor then S.OriginalAnchored = {}; setAnchor(true) end
+    if S.Invisible then applyInvisibility() end
 end))
 
---// ======================== BACKGROUND LOOPS ========================
+track(Players.PlayerRemoving:Connect(function(pl)
+    if StareTarget == pl then
+        StareTarget = nil
+        local cam = Workspace.CurrentCamera
+        if cam then cam.CameraSubject = getHum() end
+    end
+end))
+
 task.spawn(function()
     while true do
         task.wait(60)
@@ -1033,36 +962,28 @@ task.spawn(function()
 end)
 
 task.spawn(function()
-    while true do
-        task.wait(1)
-        applyFullbright()
-    end
+    while true do task.wait(1); applyFullbright() end
 end)
 
 task.spawn(function()
-    while true do
-        task.wait(0.3)
-        if S.Invisible then applyInvisibility() end
-    end
+    while true do task.wait(0.3); if S.Invisible then applyInvisibility() end end
 end)
 
---// ======================== LOAD SAVED SONGS ========================
 loadSongs()
 
---// ======================== BUILD UI ========================
-print("[Shaw Hub] Building UI...")
+print("[Shaw Hub] Step 3: Building UI...")
 
 local Window = Rayfield:CreateWindow({
     Name = "Shaw Brookhaven Hub",
     LoadingTitle = "Shaw Hub",
-    LoadingSubtitle = "v3.2",
+    LoadingSubtitle = "v3.3",
     ConfigurationSaving = { Enabled = true, FolderName = "ShawBHub", FileName = "Config" },
     KeySystem = false,
     ToggleUIKeybind = "K"
 })
-print("[Shaw Hub] Window created")
 
---// ======================== TABS ========================
+print("[Shaw Hub] Step 4: Creating tabs...")
+
 local MainTab = Window:CreateTab("Main", 4483362458)
 local VehicleTab = Window:CreateTab("Vehicle", 4483362458)
 local ProtTab = Window:CreateTab("Protection", 4483362458)
@@ -1072,27 +993,27 @@ local PlayerTab = Window:CreateTab("Players", 4483362458)
 local TrollTab = Window:CreateTab("Troll", 4483362458)
 local UtilTab = Window:CreateTab("Utility", 4483362458)
 local InfoTab = Window:CreateTab("Info", 4483362458)
+local UpdateTab = Window:CreateTab("Updates", 4483362458)
 local SetTab = Window:CreateTab("Settings", 4483362458)
 
---// ======================== COMMAND BAR ========================
+print("[Shaw Hub] Step 5: Adding components...")
+
 MainTab:CreateSection("Command Bar")
 MainTab:CreateInput({
     Name = "Command",
-    PlaceholderText = ";help for list | ;speed 100 | ;fly | ;god | ;tpwalk",
+    PlaceholderText = ";tp to r | ;tp to ca | ;bring to r | ;speed 100 | ;fly",
     RemoveTextAfterFocusLost = true,
     Flag = "CmdInput",
-    Callback = function(text)
-        if text and text ~= "" then pcall(executeCommand, text) end
-    end
+    Callback = function(text) if text and text ~= "" then pcall(executeCommand, text) end end
 })
 
---// ======================== MAIN TAB ========================
 MainTab:CreateSection("Movement")
 MainTab:CreateSlider({ Name = "Walk Speed", Range = {16, 300}, Increment = 1, Suffix = "studs", CurrentValue = 16, Flag = "SpeedSlider", Callback = function(v) S.Speed = v; S.SpeedEnabled = true end })
 MainTab:CreateSlider({ Name = "Jump Power", Range = {50, 500}, Increment = 5, Suffix = "power", CurrentValue = 50, Flag = "JumpSlider", Callback = function(v) S.JumpPower = v; S.JumpEnabled = true end })
 MainTab:CreateSlider({ Name = "Gravity", Range = {0, 500}, Increment = 5, Suffix = "", CurrentValue = 196, Flag = "GravSlider", Callback = function(v) S.Gravity = v; S.GravityEnabled = true end })
-MainTab:CreateToggle({ Name = "Fly", CurrentValue = false, Flag = "FlyToggle", Callback = function(v) S.Fly = v; if v then startFly() else stopFly() end end })
+MainTab:CreateToggle({ Name = "Fly (joystick / WASD)", CurrentValue = false, Flag = "FlyToggle", Callback = function(v) S.Fly = v; if v then startFly() else stopFly() end end })
 MainTab:CreateSlider({ Name = "Fly Speed", Range = {20, 300}, Increment = 5, Suffix = "studs", CurrentValue = 60, Flag = "FlySpeedSlider", Callback = function(v) S.FlySpeed = v end })
+MainTab:CreateParagraph({ Title = "Fly Controls", Content = "PC: WASD | Space up | Left Shift down.\nMobile: joystick to move. Aim camera up + push forward to ascend." })
 MainTab:CreateToggle({ Name = "Noclip", CurrentValue = false, Flag = "NoclipToggle", Callback = function(v) S.Noclip = v; setNoclip(v) end })
 MainTab:CreateToggle({ Name = "Infinite Jump", CurrentValue = false, Flag = "InfJumpToggle", Callback = function(v) S.InfJump = v end })
 
@@ -1108,24 +1029,21 @@ MainTab:CreateSection("Actions")
 MainTab:CreateButton({ Name = "Heal", Callback = function() healSelf() end })
 MainTab:CreateButton({ Name = "Feed", Callback = function() feedSelf() end })
 
---// ======================== VEHICLE TAB ========================
 VehicleTab:CreateSection("Vehicle Fly")
 VehicleTab:CreateToggle({ Name = "Vehicle Fly", CurrentValue = false, Flag = "VehFlyToggle", Callback = function(v) S.VehicleFly = v end })
 VehicleTab:CreateSlider({ Name = "Vehicle Fly Speed", Range = {20, 300}, Increment = 5, Suffix = "studs", CurrentValue = 60, Flag = "VehFlySpeedSlider", Callback = function(v) S.VehicleFlySpeed = v end })
-VehicleTab:CreateParagraph({ Title = "How to use", Content = "Sit in any vehicle, then toggle Vehicle Fly. WASD to move, Space up, Shift down." })
+VehicleTab:CreateParagraph({ Title = "How to use", Content = "Sit in a vehicle, toggle Vehicle Fly. WASD / joystick to move. Space up, Shift down." })
 VehicleTab:CreateSection("Vehicle Actions")
 VehicleTab:CreateButton({ Name = "Teleport Vehicle to Selected Player", Callback = function() if S.SelectedPlayer then vehicleGoto(S.SelectedPlayer) else safeNotify("Vehicle", "Select a player first.", 2) end end })
 VehicleTab:CreateButton({ Name = "Drop Vehicle at My Position", Callback = function() dropVehicle() end })
 VehicleTab:CreateButton({ Name = "Eject from Vehicle", Callback = function() ejectSelf() end })
 
---// ======================== PROTECTION TAB ========================
 ProtTab:CreateSection("Defense")
 ProtTab:CreateToggle({ Name = "Godmode", CurrentValue = false, Flag = "GodToggle", Callback = function(v) S.Godmode = v end })
 ProtTab:CreateToggle({ Name = "Anti-Void", CurrentValue = false, Flag = "AntiVoidToggle", Callback = function(v) S.AntiVoid = v end })
 ProtTab:CreateToggle({ Name = "Anti-Fling", CurrentValue = false, Flag = "AntiFlingToggle", Callback = function(v) S.AntiFling = v end })
 ProtTab:CreateToggle({ Name = "Anti-AFK", CurrentValue = false, Flag = "AntiAFKToggle", Callback = function(v) S.AntiAFK = v end })
 
---// ======================== VISUAL TAB ========================
 VisTab:CreateSection("Rendering")
 VisTab:CreateToggle({ Name = "Player ESP", CurrentValue = false, Flag = "ESPToggle", Callback = function(v) S.ESP = v end })
 VisTab:CreateToggle({ Name = "Fullbright", CurrentValue = false, Flag = "BrightToggle", Callback = function(v) S.Fullbright = v end })
@@ -1134,7 +1052,6 @@ VisTab:CreateSection("RGB Character")
 VisTab:CreateToggle({ Name = "RGB Body", CurrentValue = false, Flag = "RGBToggle", Callback = function(v) S.RGB = v end })
 VisTab:CreateSlider({ Name = "RGB Speed", Range = {0.1, 3}, Increment = 0.1, Suffix = "x", CurrentValue = 1, Flag = "RGBSpeedSlider", Callback = function(v) S.RGBSpeed = v end })
 
---// ======================== MUSIC TAB ========================
 MusicTab:CreateSection("Now Playing")
 local nowPlayingLabel = MusicTab:CreateParagraph({ Title = "Status", Content = "No song playing" })
 MusicTab:CreateSection("Play a Song")
@@ -1143,8 +1060,7 @@ MusicTab:CreateInput({ Name = "Song Name (optional)", PlaceholderText = "e.g. My
 MusicTab:CreateButton({
     Name = "Play Song",
     Callback = function()
-        local id = S.PendingSongId or ""
-        local name = S.PendingSongName or ""
+        local id = S.PendingSongId or ""; local name = S.PendingSongName or ""
         if id == "" then safeNotify("Music", "Enter a song ID first.", 2); return end
         playMusicGlobal(id, name ~= "" and name or nil)
         pcall(function() nowPlayingLabel:Set({ Title = "Now Playing", Content = (name ~= "" and name or id) .. "\nID: " .. id }) end)
@@ -1163,8 +1079,7 @@ MusicTab:CreateSection("Save This Song")
 MusicTab:CreateButton({
     Name = "Save Current Song",
     Callback = function()
-        local id = S.PendingSongId or ""
-        local name = S.PendingSongName or ""
+        local id = S.PendingSongId or ""; local name = S.PendingSongName or ""
         if id == "" then safeNotify("Music", "Enter a song ID first.", 2); return end
         addSong(id, name ~= "" and name or nil)
         pcall(function()
@@ -1183,9 +1098,7 @@ savedSongsDropdown = MusicTab:CreateDropdown({
         for _, s in ipairs(SavedSongs) do table.insert(list, s.name .. " (" .. s.id .. ")") end
         return list
     end)(),
-    CurrentOption = {},
-    MultipleOptions = false,
-    Flag = "SavedSongsDropdown",
+    CurrentOption = {}, MultipleOptions = false, Flag = "SavedSongsDropdown",
     Callback = function(option)
         local text = type(option) == "table" and option[1] or option
         if text then
@@ -1215,15 +1128,11 @@ MusicTab:CreateButton({
                 for _, s in ipairs(SavedSongs) do table.insert(list, s.name .. " (" .. s.id .. ")") end
                 if savedSongsDropdown and savedSongsDropdown.Refresh then savedSongsDropdown:Refresh(list) end
             end)
-            S.PendingSongId = nil
-            S.PendingSongName = nil
+            S.PendingSongId = nil; S.PendingSongName = nil
         end
     end
 })
-MusicTab:CreateSection("Info")
-MusicTab:CreateParagraph({ Title = "How it works", Content = "Uses Brookhaven's own music remote. Requires Music Unlocked gamepass. If the remote isn't found, plays locally only." })
 
---// ======================== PLAYERS TAB ========================
 PlayerTab:CreateSection("Player Selection")
 local playerList = {}
 local function refreshPlayerList()
@@ -1265,13 +1174,11 @@ PlayerTab:CreateButton({
 })
 PlayerTab:CreateButton({ Name = "Bring All Players", Callback = function() bringAllPlayers() end })
 
---// ======================== TROLL TAB ========================
 TrollTab:CreateSection("Actions")
 TrollTab:CreateButton({ Name = "Fling All Players", Callback = function() flingAll() end })
 TrollTab:CreateButton({ Name = "Freeze All Players", Callback = function() freezeAll() end })
 TrollTab:CreateButton({ Name = "Spam Horn", Callback = function() spamHorns() end })
 
---// ======================== UTILITY TAB ========================
 UtilTab:CreateSection("Gamepasses")
 UtilTab:CreateButton({ Name = "Attempt Unlock All Gamepasses", Callback = function() tryUnlockGamepasses() end })
 UtilTab:CreateSection("Auto Collect")
@@ -1286,8 +1193,7 @@ UtilTab:CreateButton({
             if servers and servers.data then
                 for _, srv in ipairs(servers.data) do
                     if srv.id ~= game.JobId and srv.playing < srv.maxPlayers then
-                        TeleportService:TeleportToPlaceInstance(game.PlaceId, srv.id, LP)
-                        break
+                        TeleportService:TeleportToPlaceInstance(game.PlaceId, srv.id, LP); break
                     end
                 end
             end
@@ -1295,38 +1201,87 @@ UtilTab:CreateButton({
     end
 })
 
---// ======================== KEYBINDS ========================
+InfoTab:CreateSection("About")
+InfoTab:CreateParagraph({ Title = "Shaw Brookhaven Hub v3.3", Content = "Polished Brookhaven hub with chat commands, joystick fly, music player, and Infinite Yield features." })
+InfoTab:CreateSection("Credits")
+InfoTab:CreateParagraph({ Title = "Made by", Content = "Shaw" })
+InfoTab:CreateParagraph({ Title = "Discord", Content = "Shaw6000" })
+InfoTab:CreateSection("Chat Commands")
+InfoTab:CreateParagraph({
+    Title = "Type these in Brookhaven's chat",
+    Content = ";tp to r - teleport to a RANDOM player\n;tp to c - teleport to first player whose name starts with C\n;tp to ca - teleport to first player whose name starts with Ca\n;bring to r - bring a random player\n;stare to ca - stare at player starting with Ca"
+})
+InfoTab:CreateSection("Command Bar")
+InfoTab:CreateParagraph({
+    Title = "Type in the command bar or chat",
+    Content = "fly, unfly, speed N, jump N, gravity N, noclip, clip, god, ungod, heal, feed, invisible, visible, tpwalk, wallwalk, float, anchor, rejoin"
+})
+InfoTab:CreateSection("Controls")
+InfoTab:CreateParagraph({ Title = "UI Toggle", Content = "Press K to show/hide the menu." })
+InfoTab:CreateParagraph({ Title = "Fly (PC)", Content = "WASD to move | Space up | Left Shift down" })
+InfoTab:CreateParagraph({ Title = "Fly (Mobile)", Content = "Use the joystick to move. Tilt camera up + push forward to ascend." })
+
+UpdateTab:CreateSection("v3.3 - Latest")
+UpdateTab:CreateParagraph({
+    Title = "Chat Commands Added",
+    Content = "- ;tp to r - teleport to a random player\n- ;tp to c - teleport to first player starting with C\n- ;tp to ca - use more letters to disambiguate\n- ;bring to r / ca - bring players by prefix\n- ;stare to ca - stare at players by prefix"
+})
+UpdateTab:CreateParagraph({
+    Title = "Fly System Rewrite",
+    Content = "- Removed button pad\n- Uses Humanoid.MoveDirection (works with mobile joystick)\n- PC: WASD + Space up + Shift down\n- Mobile: joystick + tilt camera up to ascend"
+})
+UpdateTab:CreateParagraph({
+    Title = "Bug Fixes",
+    Content = "- Anti-Fling no longer destroys Fly / Float / Vehicle Fly\n- StareTarget cleared when player leaves\n- Invisibility re-applied on respawn\n- Reset button resets Speed / Jump / Gravity sliders\n- Gamepass remote cache cleared on reset"
+})
+UpdateTab:CreateSection("v3.2 - Previous")
+UpdateTab:CreateParagraph({
+    Title = "Infinite Yield Features",
+    Content = "- TP Walk (raycast-based)\n- Wall Walk (hold Space)\n- Float\n- Anchor\n- Vehicle Fly + Vehicle Goto + Drop + Eject\n- Heal / Feed\n- Stare at Player\n- Keybinds (F/N/G/H)\n- Command bar"
+})
+UpdateTab:CreateSection("v3.0 - Older")
+UpdateTab:CreateParagraph({
+    Title = "Core Features",
+    Content = "- Godmode\n- Noclip\n- Fly\n- Speed / Jump / Gravity\n- Player ESP\n- Fullbright\n- Invisibility\n- RGB Character\n- Anti-Void / Anti-Fling / Anti-AFK\n- Bring All / Fling All / Freeze All\n- Auto Collect\n- Music Player with save system\n- Copy Avatar\n- Server Hop / Rejoin"
+})
+UpdateTab:CreateSection("Roadmap")
+UpdateTab:CreateParagraph({
+    Title = "Coming Soon",
+    Content = "- More chat commands (kill, freeze, fling by name)\n- Custom chat command prefix\n- Save keybinds to config\n- House teleport\n- Weather control"
+})
+
 SetTab:CreateSection("Keybinds")
 SetTab:CreateKeybind({ Name = "Toggle Fly", CurrentKeybind = "F", HoldToInteract = false, Flag = "KbFly", Callback = function() S.Fly = not S.Fly; if S.Fly then startFly() else stopFly() end end })
 SetTab:CreateKeybind({ Name = "Toggle Noclip", CurrentKeybind = "N", HoldToInteract = false, Flag = "KbNoclip", Callback = function() S.Noclip = not S.Noclip; setNoclip(S.Noclip) end })
 SetTab:CreateKeybind({ Name = "Toggle God", CurrentKeybind = "G", HoldToInteract = false, Flag = "KbGod", Callback = function() S.Godmode = not S.Godmode end })
 SetTab:CreateKeybind({ Name = "Heal", CurrentKeybind = "H", HoldToInteract = false, Flag = "KbHeal", Callback = function() healSelf() end })
 
---// ======================== SETTINGS TAB ========================
 SetTab:CreateSection("Config")
 SetTab:CreateButton({
     Name = "Reset All Toggles",
     Callback = function()
         S.Godmode = false; S.Noclip = false; S.Fly = false
-        S.SpeedEnabled = false; S.JumpEnabled = false; S.GravityEnabled = false
+        S.Speed = 16; S.SpeedEnabled = false
+        S.JumpPower = 50; S.JumpEnabled = false
+        S.Gravity = 196; S.GravityEnabled = false
         S.InfJump = false; S.ESP = false; S.Fullbright = false
         S.AntiAFK = false; S.AntiVoid = false; S.AntiFling = false
         S.Invisible = false; S.RGB = false; S.AutoCollect = false
         S.TpWalk = false; S.WallWalk = false; S.Float = false
         S.Anchor = false; S.VehicleFly = false
+        S.SelectedPlayer = nil
         stopFly(); stopVehicleFly(); cleanupAllESP()
         if FloatBV then destroy(FloatBV); FloatBV = nil end
         setNoclip(false); setAnchor(false); applyFullbright()
+        CachedGPUnlockRemotes = nil
         local flags = {
-            "GodToggle", "NoclipToggle", "FlyToggle", "InfJumpToggle",
-            "TpWalkToggle", "WallWalkToggle", "FloatToggle", "AnchorToggle",
-            "VehFlyToggle", "ESPToggle", "BrightToggle", "InvisToggle",
-            "RGBToggle", "AutoCollectToggle", "AntiVoidToggle",
-            "AntiFlingToggle", "AntiAFKToggle"
+            "GodToggle","NoclipToggle","FlyToggle","InfJumpToggle",
+            "TpWalkToggle","WallWalkToggle","FloatToggle","AnchorToggle",
+            "VehFlyToggle","ESPToggle","BrightToggle","InvisToggle",
+            "RGBToggle","AutoCollectToggle","AntiVoidToggle",
+            "AntiFlingToggle","AntiAFKToggle"
         }
-        for _, f in ipairs(flags) do
-            pcall(function() Rayfield.Flags[f]:Set(false) end)
-        end
+        for _, f in ipairs(flags) do pcall(function() Rayfield.Flags[f]:Set(false) end) end
         safeNotify("Reset", "All features disabled.", 2)
     end
 })
@@ -1334,28 +1289,13 @@ SetTab:CreateSection("Music Data")
 SetTab:CreateButton({
     Name = "Clear All Saved Songs",
     Callback = function()
-        SavedSongs = {}
-        saveSongs()
+        SavedSongs = {}; saveSongs()
         pcall(function() if savedSongsDropdown and savedSongsDropdown.Refresh then savedSongsDropdown:Refresh({}) end end)
         safeNotify("Music", "All saved songs cleared.", 2)
     end
 })
 SetTab:CreateButton({ Name = "Unload Hub", Callback = function() if getgenv().ShawBHub then pcall(getgenv().ShawBHub) end end })
 
---// ======================== INFO TAB ========================
-InfoTab:CreateSection("About")
-InfoTab:CreateParagraph({ Title = "Shaw Brookhaven Hub v3.2", Content = "Polished Brookhaven hub with Infinite Yield features.\nMusic, Vehicles, Movement, Keybinds, Command Bar." })
-InfoTab:CreateSection("Credits")
-InfoTab:CreateParagraph({ Title = "Made by", Content = "Shaw" })
-InfoTab:CreateParagraph({ Title = "Discord", Content = "Shaw6000" })
-InfoTab:CreateSection("Command Bar")
-InfoTab:CreateParagraph({ Title = "Type ;help in the command bar", Content = "fly, unfly, speed N, jump N, gravity N, noclip, clip, god, ungod, heal, feed, invisible, visible, tpwalk, wallwalk, float, anchor, goto NAME, bring NAME, stare NAME, rejoin" })
-InfoTab:CreateSection("Controls")
-InfoTab:CreateParagraph({ Title = "UI Toggle", Content = "Press K to show/hide the menu." })
-InfoTab:CreateParagraph({ Title = "Fly (PC)", Content = "WASD move | Space up | Shift down" })
-InfoTab:CreateParagraph({ Title = "Vehicle Fly", Content = "WASD move | Space up | Shift down" })
-
---// ======================== CLEANUP ========================
 getgenv().ShawBHub = function()
     stopFly(); stopVehicleFly(); stopMusic()
     S.Godmode = false; S.Noclip = false; S.ESP = false; S.RGB = false
@@ -1369,7 +1309,6 @@ getgenv().ShawBHub = function()
     if FlyBV then destroy(FlyBV); FlyBV = nil end
     if FlyBG then destroy(FlyBG); FlyBG = nil end
     if FloatBV then destroy(FloatBV); FloatBV = nil end
-    if FlyPad then destroy(FlyPad); FlyPad = nil end
     if MusicSound then destroy(MusicSound); MusicSound = nil end
     MusicRemote = nil; MusicRemoteChecked = false; StareTarget = nil
     CachedVehicle = nil; CachedGPUnlockRemotes = nil
@@ -1402,6 +1341,23 @@ getgenv().ShawBHub = function()
     safeNotify("Shaw Hub", "Unloaded successfully.", 2)
 end
 
---// ======================== READY ========================
-safeNotify("Shaw Brookhaven Hub v3.2", "Loaded! Press K to toggle UI.", 5)
-print("[Shaw Brookhaven Hub v3.2] Loaded successfully")
+print("[Shaw Hub] Step 6: All components loaded")
+
+safeNotify("Shaw Brookhaven Hub v3.3", "Loaded! Chat ;tp to r. Press K for UI.", 6)
+print("[Shaw Brookhaven Hub v3.3] Loaded successfully")
+
+end)
+
+if not ok then
+    warn("[Shaw Hub] FAILED: " .. tostring(err))
+    pcall(function()
+        local pg = game:GetService("Players").LocalPlayer:FindFirstChild("PlayerGui")
+        if pg then
+            for _, v in ipairs(pg:GetChildren()) do
+                if v.Name == "ShawBrookhavenHub" or v.Name == "ShawFlyPad" or v.Name == "Rayfield" then
+                    v:Destroy()
+                end
+            end
+        end
+    end)
+end
